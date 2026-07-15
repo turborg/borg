@@ -66,15 +66,16 @@ from recorded cassettes, or driven by scripted stubs.
 
 ## Branching strategy
 
-borg has **two long-lived branches**:
+We use **trunk-based development**:
 
-- **`staging`** — the integration branch. **Open your PR against `staging`.**
-- **`main`** — the release branch. Only ever updated by promoting `staging`; release-please cuts
-  versions from it.
+- One long-lived branch: `main`
+- Short-lived branches: `feat/<topic>`, `fix/<topic>`, `docs/<topic>`, `refactor/<topic>`,
+  `chore/<topic>`
+- All changes go through PRs against `main`; **squash-merge only**, so `main` stays linear and
+  readable
+- Branch protection on `main` blocks force-push and direct push; CI + CLA must pass
 
-Work on short-lived branches: `feat/<topic>`, `fix/<topic>`, `docs/<topic>`, `refactor/<topic>`,
-`chore/<topic>`. Feature PRs are **squash-merged** into `staging`. The `staging → main` promotion
-uses a merge commit so the release keeps its history.
+No `develop`, no `staging`, no GitFlow.
 
 ## Commit messages
 
@@ -112,7 +113,7 @@ You don't need to update `CHANGELOG.md` or the version constant manually — rel
 
 Before opening a PR:
 
-- [ ] PR targets `staging` (not `main`)
+- [ ] PR targets `main`
 - [ ] PR title follows Conventional Commits
 - [ ] Tests added or updated to cover the change
 - [ ] Coverage stays at or above 90% (`make cover-gate`)

@@ -1,9 +1,7 @@
 name: CI
 
-# Lint + race tests + coverage gate. Runs on PRs and on pushes to the long-lived
-# branches. Note: GitHub-token-created PRs (the auto staging→main PR) don't kick
-# off pull_request runs, so we also run on push to staging/main — check runs
-# attach to the commit SHA, so the PR still shows these results for its head.
+# Lint + race tests + coverage gate. Runs on PRs and on pushes to `main`, the
+# single long-lived branch.
 #
 # Unlike local dev (which runs tests in Docker to keep untrusted dependency code
 # off the operator's machine), CI runs natively: the runner is an ephemeral,
@@ -11,7 +9,7 @@ name: CI
 
 on:
   push:
-    branches: [staging, main]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 

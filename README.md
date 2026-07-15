@@ -123,8 +123,8 @@ pass?) rather than model-as-judge, with a committed baseline to catch regression
 
 ## Contributing
 
-PRs welcome — please read [CONTRIBUTING.md](CONTRIBUTING.md) first. Open PRs against **`staging`**,
-not `main`. First-time contributors will be prompted to sign the [CLA](CLA.md).
+PRs welcome — please read [CONTRIBUTING.md](CONTRIBUTING.md) first. Open PRs against **`main`**;
+we squash-merge. First-time contributors will be prompted to sign the [CLA](CLA.md).
 
 Found a security issue? **Don't open a public issue** — see [SECURITY.md](SECURITY.md).
 

@@ -2,7 +2,6 @@
 Thanks for contributing to borg!
 
 Before opening this PR:
-- [ ] It targets `staging`, not `main`
 - [ ] PR title follows Conventional Commits (e.g. `feat(tools): add glob`)
 - [ ] You've read CONTRIBUTING.md
 - [ ] You've signed the CLA (the cla-assistant bot will guide you on first PR)
@@ -32,7 +31,6 @@ Before opening this PR:
 
 ## Checklist
 
-- [ ] Targets `staging`
 - [ ] Tests added or updated
 - [ ] Coverage is still ≥ 90% (`make cover-gate`)
 - [ ] `make lint` and `make docker-test` are green locally
