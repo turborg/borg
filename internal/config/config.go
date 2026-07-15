@@ -164,16 +164,24 @@ func Load() (*Config, error) {
 	return &c, nil
 }
 
-// resolveAPIKey fills APIKey from the first source that has it: BORG_API_KEY, the
-// env var named by BORG_API_KEY_ENV (so an existing OPENAI_API_KEY export can be
-// reused without copying the secret anywhere), then BORG_ACCESS_TOKEN — the
-// original, still-supported name for the same thing (CI and the eval bot set it).
-// No source is a file: a key is never read from settings.json.
+// resolveAPIKey fills APIKey from the first source that has it: BORG_API_KEY, then
+// the env var named by BORG_API_KEY_ENV (so an existing OPENAI_API_KEY export can
+// be reused without copying the secret anywhere). No source is a file: a key is
+// never read from settings.json.
+//
+// BORG_ACCESS_TOKEN is deliberately consulted ONLY on the hosted provider. It is
+// not a generic bearer despite the name it shares with one: it holds an xShellz
+// PAT, and CI, the eval bot and the documented local-eval workflow all export it.
+// Treating it as "the key for whatever backend is active" would mean that anyone
+// with it exported who then set BORG_PROVIDER=openrouter (or any other
+// third-party endpoint) would send their xShellz credential straight to that
+// vendor as a Bearer header. A credential is scoped to the service that issued
+// it; carrying it to a different one is never a convenience worth having.
 func (c *Config) resolveAPIKey() {
 	if c.APIKey == "" && c.APIKeyEnv != "" {
 		c.APIKey = strings.TrimSpace(os.Getenv(c.APIKeyEnv))
 	}
-	if c.APIKey == "" {
+	if c.APIKey == "" && !c.BringYourOwn() {
 		c.APIKey = strings.TrimSpace(os.Getenv(EnvAccessToken))
 	}
 }

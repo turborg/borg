@@ -255,3 +255,51 @@ func TestProviderSettingsAreRegistered(t *testing.T) {
 	_, _, err = SetSetting("provider", "gemini")
 	require.Error(t, err, "an unknown provider is rejected at the edit, not at startup")
 }
+
+// BORG_ACCESS_TOKEN holds an xShellz PAT. CI, the eval bot and the documented
+// local-eval workflow all export it, so it is routinely present in a shell that
+// then experiments with a local or third-party backend. It must never be handed
+// to one: borg used to pass it through as the Bearer for whatever provider was
+// active, which sent the platform credential to (say) openrouter.ai.
+func TestXShellzTokenNeverLeavesTheHostedProvider(t *testing.T) {
+	for _, p := range []string{ProviderOllama, ProviderOpenAI, ProviderOpenRouter, ProviderCustom} {
+		t.Run(p, func(t *testing.T) {
+			t.Setenv(EnvAccessToken, "xshellz-pat-secret")
+			t.Setenv("BORG_PROVIDER", p)
+			t.Setenv("BORG_BASE_URL", "http://127.0.0.1:1/v1")
+			c, err := Load()
+			require.NoError(t, err)
+			require.Empty(t, c.APIKey, "%s must not be sent the xShellz PAT", p)
+		})
+	}
+}
+
+// The same variable IS the bearer on the hosted provider — that's what CI relies on.
+func TestXShellzTokenStillWorksOnTheHostedProvider(t *testing.T) {
+	t.Setenv(EnvAccessToken, "xshellz-pat-secret")
+	t.Setenv("BORG_PROVIDER", ProviderXShellz)
+	c, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "xshellz-pat-secret", c.APIKey)
+}
+
+// An explicit BORG_API_KEY is the user's own key for their own backend, so it is
+// honored off-platform — only the xShellz-issued one is scoped out.
+func TestExplicitKeyIsHonoredOffPlatform(t *testing.T) {
+	t.Setenv(EnvAccessToken, "xshellz-pat-secret")
+	t.Setenv(EnvAPIKey, "sk-users-own")
+	t.Setenv("BORG_PROVIDER", ProviderOpenRouter)
+	c, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "sk-users-own", c.APIKey)
+}
+
+// Hosted() re-aims a config at the platform, so it must drop the key that belonged
+// to the endpoint it just dropped.
+func TestHostedDropsTheByoKey(t *testing.T) {
+	c := &Config{Provider: ProviderOpenAI, BaseURL: "https://api.openai.com/v1", APIKey: "sk-users-own", APIKeyEnv: "OPENAI_API_KEY", APIBaseURL: "https://api.xshellz.com"}
+	h := c.Hosted()
+	require.Empty(t, h.APIKey, "an OpenAI key must not ride along to xShellz")
+	require.Empty(t, h.APIKeyEnv)
+	require.Equal(t, "sk-users-own", c.APIKey, "the original config is untouched")
+}

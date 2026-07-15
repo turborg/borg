@@ -95,6 +95,13 @@ func (c *Config) Hosted() *Config {
 	}
 	h.Provider = ProviderXShellz
 	h.BaseURL = ""
+	// Drop the key with the endpoint it belonged to. APIKey here is the user's
+	// OpenAI/OpenRouter credential, scoped to THEIR vendor; a config aimed at the
+	// platform must not carry it, or a caller that reasonably reads cfg.APIKey as
+	// "the bearer" would hand someone else's secret to xShellz. Callers that need
+	// to authenticate to the platform pass the account's own token explicitly.
+	h.APIKey = ""
+	h.APIKeyEnv = ""
 	h.LLMProxyURL = os.Getenv("BORG_LLM_PROXY_URL") // "" unless explicitly exported
 	h.deriveLLMProxy()
 	return &h
