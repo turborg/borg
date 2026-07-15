@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 )
@@ -80,6 +81,14 @@ type Config struct {
 	// borg to read the real window from: a local 32k model told it has 1M would
 	// silently truncate the conversation instead of warning. 0 = auto-detect.
 	ContextWindow int `env:"BORG_CONTEXT"`
+
+	// TimeToFirstByte caps the wait for a model's first response header. 0 = pick
+	// by provider: a couple of minutes against the hosted proxy (where a slow
+	// prefill means a fault), but far longer for a backend the user runs, where
+	// prefill on CPU legitimately takes minutes and scales with prompt size. Raise
+	// it if a big local model on modest hardware still gets cut off; it only ever
+	// bounds the wait BEFORE the first byte, never the generation itself.
+	TimeToFirstByte time.Duration `env:"BORG_TTFB"`
 
 	// APIBaseURL is the accounts-api base used for the OAuth flows.
 	APIBaseURL string `env:"BORG_API_BASE_URL" envDefault:"https://api.xshellz.com"`

@@ -38,13 +38,30 @@ type Client struct {
 	effort  string // explicit reasoning_effort; "" lets the proxy map the think toggle
 	http    *http.Client
 	debug   func(string) // verbose diagnostics sink (nil = off)
-	caps    Capabilities // what this backend supports beyond the standard API
-	name    string       // the provider kind (config.Provider*)
+	caps    Capabilities  // what this backend supports beyond the standard API
+	name    string        // the provider kind (config.Provider*)
+	ttfb    time.Duration // configured first-byte cap (0 = by provider); kept to report it
 }
 
 // timeToFirstByte caps how long we wait for the response headers — i.e. a proxy
 // or model that never starts replying. It does NOT bound the stream itself.
+//
+// This value assumes a hosted proxy in front of a GPU fleet, where a prefill that
+// takes two minutes means something is broken. It is a bad assumption for a model
+// running on the user's own machine: measured against Ollama on CPU, a ~18 KB
+// prompt with borg's tool schemas took over two minutes just to produce the first
+// header — the model was healthy and answering, only slowly. Applying the hosted
+// cap there fails the turn, retries it twice more (postWithRetry), and burns six
+// minutes to report a timeout that never had anything to do with a fault. So the
+// cap is per-provider, not universal — see byoTimeToFirstByte.
 const timeToFirstByte = 120 * time.Second
+
+// byoTimeToFirstByte is the cap for a bring-your-own backend. Prefill on consumer
+// hardware scales with prompt size and has no ceiling we can predict, so this is
+// deliberately generous: a slow answer is the normal case locally, and waiting is
+// strictly better than discarding a turn the model was going to complete. A model
+// that is genuinely wedged still fails, just later. Override with BORG_TTFB.
+const byoTimeToFirstByte = 10 * time.Minute
 
 // idleTimeout aborts a stream that goes silent mid-flight (no SSE line for this
 // long). It is reset on every chunk, so a long-but-progressing generation runs
@@ -52,18 +69,32 @@ const timeToFirstByte = 120 * time.Second
 // body read and would cut a healthy long reply (e.g. generating a full file).
 const idleTimeout = 120 * time.Second
 
+// ttfbFor picks the time-to-first-byte cap for a provider: an explicit override
+// wins, otherwise the hosted cap on xShellz and the generous one everywhere else.
+// Keyed on "is this our proxy", not on a model or vendor name — any backend the
+// user runs themselves gets the patient treatment.
+func ttfbFor(provider string, override time.Duration) time.Duration {
+	if override > 0 {
+		return override
+	}
+	if provider == config.ProviderXShellz {
+		return timeToFirstByte
+	}
+	return byoTimeToFirstByte
+}
+
 // New builds a Client for the configured provider endpoint and bearer. The bearer
 // is the xShellz access token on the default provider, or the user's own API key
 // (cfg.APIKey) on a bring-your-own backend — an empty one is fine and means no
 // Authorization header is sent at all, which is the normal case for a local daemon.
 func New(cfg *config.Config, accessToken string) *Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.ResponseHeaderTimeout = timeToFirstByte
 	name := cfg.Provider
 	if name == "" {
 		name = config.ProviderXShellz // a zero-value Config (tests, embedders) is the hosted default
 	}
 	caps := CapabilitiesFor(name)
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = ttfbFor(name, cfg.TimeToFirstByte)
 	// Off-platform there is no accounts-api at all, so drop the base outright
 	// rather than leaving a URL around that a stray call could reach for.
 	apiBase := ""
@@ -73,6 +104,7 @@ func New(cfg *config.Config, accessToken string) *Client {
 	return &Client{
 		caps:    caps,
 		name:    name,
+		ttfb:    cfg.TimeToFirstByte,
 		baseURL: strings.TrimRight(cfg.LLMProxyURL, "/"),
 		apiBase: apiBase,
 		token:   accessToken,
@@ -507,6 +539,30 @@ func isRetryableStream(err error) bool {
 	return errors.As(err, &e)
 }
 
+// isHeaderTimeout reports whether err is the transport's ResponseHeaderTimeout —
+// the backend accepted the request but sent no header in time. Matched on the
+// transport's own wording as well as net.Error.Timeout(), because a plain
+// net.Error also covers dial/TLS timeouts, which are a different problem (nothing
+// is listening) with different advice.
+func isHeaderTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "timeout awaiting response headers")
+}
+
+// slowBackendError turns the transport's "timeout awaiting response headers" —
+// which tells the user nothing — into the actual diagnosis and the knob that
+// fixes it. Worded for whoever is actually on the other end: on a backend the
+// user runs, a slow first byte usually means prefill on CPU, not a fault.
+func (c *Client) slowBackendError(err error) error {
+	if c.caps.AccountEndpoints { // hosted: a slow prefill really is a fault
+		return fmt.Errorf("llm request: %w", err)
+	}
+	return fmt.Errorf("%s at %s sent no response within %s.\n\nThe model is probably just slow to start: prefill on CPU takes minutes and grows with the prompt, and borg's system prompt plus tool schemas is a large one. Raise the wait with BORG_TTFB (e.g. BORG_TTFB=20m), or use a smaller/quantized model. This bounds only the wait for the FIRST byte, never generation: %w",
+		c.name, c.baseURL, ttfbFor(c.name, c.ttfb), err)
+}
+
 // postWithRetry POSTs body and returns a 200 response, retrying TRANSIENT
 // failures — network errors, 408, and 5xx — with exponential backoff + jitter,
 // honoring a server Retry-After. It does not retry 4xx (including 429, which here
@@ -540,6 +596,14 @@ func (c *Client) postWithRetry(ctx context.Context, url string, body []byte) (*h
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err() // cancelled (Ctrl-C) — not a transient failure
+			}
+			// A first-byte timeout is NOT transient: the backend is just slower than
+			// the cap, so every retry waits the whole cap again and fails the same
+			// way — turning one slow turn into maxAttempts of silence (measured: 6
+			// minutes to report a local model that was answering fine). Fail once,
+			// and say the thing the user can act on.
+			if isHeaderTimeout(err) {
+				return nil, c.slowBackendError(err)
 			}
 			lastErr = fmt.Errorf("llm request: %w", err)
 			continue // transient transport error → retry

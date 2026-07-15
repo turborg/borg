@@ -161,6 +161,13 @@ Two things to set for a local model:
 - **Reasoning knobs are off.** `/think` and `/effort` are hosted-only — those fields aren't portable
   and most local servers reject a request carrying them outright.
 
+Expect the **first reply of a turn to be slow** on CPU. borg's system prompt plus tool schemas is a
+large prompt (~18 KB), and prefill has to chew through all of it before the first token appears —
+minutes, on a big model without a GPU. borg waits up to **10 minutes** for that first byte on a
+backend you run (versus 2 against the hosted proxy, where a slow prefill means something's broken).
+If that's still not enough, raise it with **`BORG_TTFB`** (e.g. `BORG_TTFB=20m`). It bounds only the
+wait *before* the first byte — never generation, which can take as long as it takes.
+
 ### Hosted (xShellz)
 
 Stable codenames, so the underlying model can improve without breaking your workflow. They're all

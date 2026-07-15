@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -403,4 +404,82 @@ func TestProviderIdentity(t *testing.T) {
 	require.False(t, c.RequiresAuth())
 	require.Equal(t, KindOllama, c.Name())
 	require.Equal(t, CapabilitiesFor(KindOllama), c.Caps())
+}
+
+// A backend that accepts the request and then says nothing is the normal shape of
+// a local model doing prefill on CPU — not a fault. These tests pin the behaviour
+// found by running against real Ollama: borg used to apply the hosted 2-minute cap
+// everywhere, then retry it twice, spending six minutes to fail a model that was
+// answering fine.
+func TestFirstByteCapIsPerProvider(t *testing.T) {
+	// The hosted proxy fronts a GPU fleet: a slow prefill there means a fault, so
+	// the tight cap is correct. A backend the user runs gets a patient one.
+	require.Equal(t, timeToFirstByte, ttfbFor(config.ProviderXShellz, 0))
+	for _, p := range []string{config.ProviderOllama, config.ProviderCustom, config.ProviderOpenAI, config.ProviderOpenRouter} {
+		require.Equal(t, byoTimeToFirstByte, ttfbFor(p, 0), "%s is not ours to assume is fast", p)
+	}
+	require.Greater(t, byoTimeToFirstByte, timeToFirstByte)
+}
+
+func TestFirstByteCapOverrideWins(t *testing.T) {
+	require.Equal(t, 42*time.Second, ttfbFor(config.ProviderXShellz, 42*time.Second))
+	require.Equal(t, 42*time.Second, ttfbFor(config.ProviderOllama, 42*time.Second))
+}
+
+// The cap must reach the transport, or the constant is decoration.
+func TestFirstByteCapReachesTheTransport(t *testing.T) {
+	c := New(&config.Config{Provider: config.ProviderOllama, LLMProxyURL: "http://x/v1"}, "")
+	tr, ok := c.http.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Equal(t, byoTimeToFirstByte, tr.ResponseHeaderTimeout)
+
+	c = New(&config.Config{Provider: config.ProviderOllama, LLMProxyURL: "http://x/v1", TimeToFirstByte: 7 * time.Second}, "")
+	tr, _ = c.http.Transport.(*http.Transport)
+	require.Equal(t, 7*time.Second, tr.ResponseHeaderTimeout)
+}
+
+// A slow backend must fail ONCE, not maxAttempts times: each retry waits the whole
+// cap and fails identically, so retrying only multiplies the silence.
+func TestSlowBackendIsNotRetried(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		time.Sleep(300 * time.Millisecond) // outlive the cap below, send no header
+	}))
+	defer srv.Close()
+
+	c := New(&config.Config{
+		Provider:        config.ProviderOllama,
+		LLMProxyURL:     srv.URL + "/v1",
+		Model:           "local",
+		TimeToFirstByte: 50 * time.Millisecond,
+	}, "")
+	_, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, false, func(string) {})
+
+	require.Error(t, err)
+	require.EqualValues(t, 1, atomic.LoadInt32(&hits), "a first-byte timeout is not transient — retrying just waits the cap again")
+	// The message must name the cause and the knob, not leak net/http's wording.
+	require.Contains(t, err.Error(), "BORG_TTFB")
+	require.Contains(t, err.Error(), "ollama")
+	require.NotContains(t, err.Error(), "not logged in")
+}
+
+// The hosted path keeps net/http's wording (a slow proxy IS a fault) and must not
+// advertise a local-tuning knob.
+func TestSlowHostedBackendKeepsItsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	c := New(&config.Config{
+		Provider:        config.ProviderXShellz,
+		LLMProxyURL:     srv.URL + "/v1",
+		Model:           "chuppa",
+		TimeToFirstByte: 50 * time.Millisecond,
+	}, "tok")
+	_, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, false, func(string) {})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "llm request")
+	require.NotContains(t, err.Error(), "BORG_TTFB")
 }
