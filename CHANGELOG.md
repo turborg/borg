@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/turborg/borg/compare/v0.1.0...v0.2.0) (2026-07-15)
+
+
+### Features
+
+* talk to any OpenAI-compatible backend, not just xShellz ([#8](https://github.com/turborg/borg/issues/8)) ([dc68280](https://github.com/turborg/borg/commit/dc68280083254d852357ebf60a622719c0122e3c))
+
+
+### Documentation
+
+* regenerate BORG.md for the open-source tree ([#5](https://github.com/turborg/borg/issues/5)) ([16fe087](https://github.com/turborg/borg/commit/16fe087b6c6111d98fd7e9a7ff966d987be1ee4f))
+
 ## 0.1.0 (2026-06-25)
 
 
