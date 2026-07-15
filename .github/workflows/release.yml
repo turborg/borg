@@ -1,0 +1,114 @@
+name: Release
+
+# Automated, tag-free releases (mirrors the turborg repo). As conventional
+# commits land on `main`, release-please opens/updates a release PR that bumps
+# the version + CHANGELOG. Merging that PR tags `vX.Y.Z` and creates the
+# release, which triggers GoReleaser to build the cross-platform binaries and
+# publish them to the turborg-cli R2 bucket (served at dl.turborg.com).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: rp
+        with:
+          # A PAT (not GITHUB_TOKEN) so the release PR is authored by a user and
+          # therefore triggers CI; provisioned by the infra turborg-manage stack.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  goreleaser:
+    name: Build + publish to R2
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # GoReleaser inspects history; the tag is on HEAD.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Cross-compile + archive + checksums into dist/. release.disable in
+      # .goreleaser.yml means no GitHub Release is created by GoReleaser
+      # (release-please already made the tag/release; repo is private).
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      # Publish artifacts to the turborg-cli R2 bucket under both the tag and a
+      # stable `latest/` prefix. Auth is the account-scoped R2 token — no S3 keys.
+      - name: Publish to Cloudflare R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          npm install -g wrangler@4
+          shopt -s nullglob
+          for f in dist/*.tar.gz dist/*.zip dist/checksums.txt; do
+            name="$(basename "$f")"
+            echo "uploading $name -> $TAG/ and latest/"
+            wrangler r2 object put "turborg-cli/$TAG/$name" --file "$f" --remote
+            wrangler r2 object put "turborg-cli/latest/$name" --file "$f" --remote
+          done
+
+          # Version manifest read by the self-updater (`turborg update` / the
+          # startup nudge) and the docs site.
+          printf '{"version":"%s"}\n' "${TAG#v}" > version.json
+          wrangler r2 object put "turborg-cli/latest/version.json" --file version.json --remote --content-type application/json
+          wrangler r2 object put "turborg-cli/$TAG/version.json" --file version.json --remote --content-type application/json
+
+      # Generate the CLI reference from the source (at THIS version) and publish
+      # it per-version for the turborg.com docs site's version picker. Each
+      # release's reference reflects that release's commands/flags/deprecations.
+      - name: Publish versioned docs to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          ver="${TAG#v}"
+          go build -o ./turborg ./cmd/borg   # argv[0]=turborg so the ref says "turborg"
+          ./turborg gen-docs docs
+
+          md="text/markdown; charset=utf-8"
+          put() { wrangler r2 object put "turborg-cli/$1" --file "$2" --remote --content-type "$3"; }
+
+          # Public changelog: strip the PR/commit links — borg is a PRIVATE repo,
+          # so those github.com/turborg/borg/... links 404 for end users.
+          if [ -f CHANGELOG.md ]; then
+            sed -E 's# \(\[[^]]*\]\([^)]*\)\)##g' CHANGELOG.md > CHANGELOG.public.md
+          fi
+
+          # Per-version path + a stable latest/ alias.
+          for d in "docs/v/$ver" "docs/latest"; do
+            put "$d/reference.md" docs/reference.md "$md"
+            [ -f CHANGELOG.public.md ] && put "$d/CHANGELOG.md" CHANGELOG.public.md "$md"
+          done
+
+          # Maintain the version manifest that feeds the docs version picker
+          # (newest first, deduped). Seeded empty on the first release.
+          if ! wrangler r2 object get "turborg-cli/docs/versions.json" --file versions.json --remote 2>/dev/null; then
+            echo '{"latest":"","versions":[]}' > versions.json
+          fi
+          jq --arg v "$ver" '.latest=$v | .versions = ([$v] + (.versions - [$v]))' versions.json > versions.new
+          mv versions.new versions.json
+          put "docs/versions.json" versions.json "application/json"

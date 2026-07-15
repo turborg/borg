@@ -1,0 +1,14 @@
+# golangci-lint v2 config. Only deviation from defaults: stop errcheck from
+# flagging the "intentionally ignored error" idiom for writers and closers —
+# fmt.Fprint* to stdout/stderr and (io.Closer).Close errors are never
+# actionable, so checking them would only add noise (or _ = ... churn).
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln

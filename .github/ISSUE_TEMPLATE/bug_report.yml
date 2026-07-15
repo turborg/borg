@@ -1,0 +1,78 @@
+name: Bug report
+description: Something in borg doesn't work the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill in as much as you can — a minimal
+        reproduction is by far the most useful thing you can give us.
+
+        **Do not report security vulnerabilities here.** See [SECURITY.md](https://github.com/turborg/borg/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+      placeholder: |
+        I ran `borg "fix the failing test"` and ...
+        I expected ... but instead ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that triggers it. Include the prompt you gave the agent, if relevant.
+      placeholder: |
+        1. In a repo containing ...
+        2. Run `borg ...`
+        3. See ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: borg version
+      description: Output of `turborg --version` (or `borg --version`).
+      placeholder: "turborg 0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and terminal
+      description: Terminal emulator matters for REPL/rendering bugs.
+      placeholder: "Ubuntu 24.04, GNOME Terminal / macOS 15, iTerm2 / Windows 11, Windows Terminal"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: model
+    attributes:
+      label: Which model were you using?
+      options:
+        - Chuppa Flash (default)
+        - Chuppa Pro
+        - Floko
+        - Axiom
+        - Not sure / not applicable
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: |
+        Paste terminal output or the transcript. Run with `--debug` for more detail.
+
+        **Please redact anything sensitive** — access tokens, private source, internal hostnames.
+        This will be automatically formatted as code, so no backticks needed.
+      render: shell
+    validations:
+      required: false

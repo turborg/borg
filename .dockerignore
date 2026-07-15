@@ -1,0 +1,23 @@
+# Build context exclusions — keep the image build cache layer cheap.
+.git
+.github
+.vscode
+.idea
+
+# Test + coverage artifacts
+*.test
+*.prof
+coverage.out
+coverage.html
+
+# Build output
+bin/
+dist/
+
+# Local environment + credentials (never copy a real token store into a layer).
+.env
+.envrc
+credentials.json
+
+# Local notes.
+CLAUDE.md

@@ -1,0 +1,48 @@
+version: 2
+
+project_name: turborg
+
+# The CLI ships as `turborg` (primary); install.sh links `borg` when free.
+builds:
+  - id: turborg
+    main: ./cmd/borg
+    binary: turborg
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/turborg/borg/internal/version.Version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    # No version in the name — install.sh fetches dl.turborg.com/<version>/<name>,
+    # so the version lives in the R2 path, not the filename.
+    name_template: "turborg_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# We publish binaries to Cloudflare R2 ourselves (see .github/workflows/release.yml),
+# not to a GitHub Release — the repo is private.
+release:
+  disable: true
+
+changelog:
+  disable: true

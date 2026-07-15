@@ -1,0 +1,61 @@
+name: Feature request
+description: Suggest a capability or improvement for borg
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Concrete proposals grounded in a real workflow get reviewed fastest.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation you hit, not just the solution you have in mind.
+      placeholder: "When I work in a monorepo, borg ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should borg do instead? A sketch of the UX or API is welcome.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Agent loop / harness quality
+        - Tools (read, edit, bash, grep, …)
+        - REPL / TUI
+        - Auth and login
+        - Sessions and context
+        - CLI commands and flags
+        - Docs
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Anything you tried or ruled out, and why it didn't fit.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: generality
+    attributes:
+      label: Generality check
+      description: |
+        borg's harness must work in **any** repository in **any** language. Proposals that depend on
+        one language, framework, or command name are unlikely to be accepted as-is — see
+        [CONTRIBUTING.md](https://github.com/turborg/borg/blob/main/CONTRIBUTING.md).
+      options:
+        - label: This would still make sense in a repo whose language I've never seen (or I've explained below why it must be language-specific).
+          required: false

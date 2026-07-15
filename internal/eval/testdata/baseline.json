@@ -1,0 +1,129 @@
+{
+  "chuppa": {
+    "fix-across-files": {
+      "passed": true,
+      "steps": 5,
+      "in_tokens": 26878
+    },
+    "fix-bounds-panic": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 20241
+    },
+    "fix-clamp-logic": {
+      "passed": true,
+      "steps": 6,
+      "in_tokens": 31205
+    },
+    "fix-compile-error": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 19837
+    },
+    "fix-failing-test": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 20421
+    },
+    "fix-json-tag": {
+      "passed": true,
+      "steps": 5,
+      "in_tokens": 25805
+    },
+    "fix-merge-sorted": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 21193
+    },
+    "fix-nil-map-panic": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 20326
+    },
+    "fix-off-by-one": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 20461
+    },
+    "fix-rotate-slice": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 21305
+    },
+    "fix-two-bugs-two-files": {
+      "passed": true,
+      "steps": 6,
+      "in_tokens": 33635
+    },
+    "grep-and-fix": {
+      "passed": true,
+      "steps": 5,
+      "in_tokens": 26837
+    },
+    "implement-from-context": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 20906
+    },
+    "implement-interface": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 20001
+    },
+    "implement-missing-function": {
+      "passed": true,
+      "steps": 5,
+      "in_tokens": 25786
+    },
+    "keeps-gofmt-clean-edit": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 19815
+    },
+    "keeps-gofmt-clean-implement": {
+      "passed": true,
+      "steps": 4,
+      "in_tokens": 19624
+    },
+    "learn-project-context": {
+      "passed": true,
+      "steps": 5,
+      "in_tokens": 34587
+    },
+    "learn-stays-lean": {
+      "passed": true,
+      "steps": 7,
+      "in_tokens": 52828
+    },
+    "locate-fix-constant": {
+      "passed": true,
+      "steps": 6,
+      "in_tokens": 32744
+    },
+    "merge-feature-branch": {
+      "passed": true,
+      "steps": 6,
+      "in_tokens": 30283
+    },
+    "red-herring-fix": {
+      "passed": true,
+      "steps": 5,
+      "in_tokens": 27356
+    },
+    "refactor-signature": {
+      "passed": true,
+      "steps": 5,
+      "in_tokens": 26309
+    },
+    "search-find-value": {
+      "passed": true,
+      "steps": 3,
+      "in_tokens": 14491
+    },
+    "trace-call-chain": {
+      "passed": true,
+      "steps": 6,
+      "in_tokens": 32955
+    }
+  }
+}

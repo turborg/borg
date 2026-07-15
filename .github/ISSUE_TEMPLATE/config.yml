@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/turborg/borg/security/advisories/new
+    about: Report security issues privately. Please do NOT open a public issue for security bugs — see SECURITY.md.
+  - name: Question or discussion
+    url: https://github.com/turborg/borg/discussions
+    about: Ask questions, share ideas, and discuss usage in GitHub Discussions.
+  - name: Account, billing, or plan issues
+    url: https://www.xshellz.com
+    about: borg's login and model usage are provided by the xShellz platform. For account, plan, or billing questions, contact xShellz support rather than this repository.

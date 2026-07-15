@@ -1,0 +1,44 @@
+name: CI
+
+# Lint + race tests + coverage gate. Runs on PRs and on pushes to the long-lived
+# branches. Note: GitHub-token-created PRs (the auto staging→main PR) don't kick
+# off pull_request runs, so we also run on push to staging/main — check runs
+# attach to the commit SHA, so the PR still shows these results for its head.
+#
+# Unlike local dev (which runs tests in Docker to keep untrusted dependency code
+# off the operator's machine), CI runs natively: the runner is an ephemeral,
+# throwaway VM, so the host-protection rationale doesn't apply here.
+
+on:
+  push:
+    branches: [staging, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Race tests + coverage gate (>=90%)
+        run: |
+          go test -race -count=1 -coverprofile=cov.out ./internal/...
+          go run github.com/vladopajic/go-test-coverage/v2@latest \
+            --config .testcoverage.yml --profile cov.out

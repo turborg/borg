@@ -1,0 +1,11 @@
+# Coverage gate enforced by `make cover-gate` (github.com/vladopajic/go-test-coverage).
+# Total statement coverage across internal/ must stay at or above 90%.
+threshold:
+  total: 90
+
+# cmd/borg (entry point) and internal/version (a single var) are excluded — they
+# carry no meaningful logic to test.
+exclude:
+  paths:
+    - ^cmd/borg
+    - ^internal/version

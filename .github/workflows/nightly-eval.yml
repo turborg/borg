@@ -1,0 +1,111 @@
+name: Nightly agent eval
+
+# Runs the live, token-spending agent eval (tier 3) against the staging metered
+# proxy, scored by objective oracles — this is borg's quality signal over time.
+#
+# By default it drives CHUPPA ONLY (our strongest coding model — DeepSeek V4
+# Flash — and cheap): the nightly schedule passes no input, so it falls back to
+# chuppa. A manual run (workflow_dispatch) exposes a dropdown to pick `floko`,
+# `chuppa`, or `floko,chuppa` (the side-by-side comparison). Axiom is never an
+# option — it's too expensive, and the test refuses it outright. It is INERT
+# until configured: without the eval credential the job no-ops, so it costs
+# nothing.
+#
+# To enable (deliberately — this spends tokens on a schedule):
+#   1. Create a DEDICATED eval/bot xShellz account (not a personal one) so the
+#      spend, budget, and blast radius are isolated. Cap it small (cheap models
+#      only) via the per-account credit budget so a runaway can't burn real spend.
+#   2. Mint a long-lived Passport personal access token (PAT) for that account.
+#   3. Repo → Settings → Secrets and variables → Actions:
+#        secret  BORG_EVAL_ACCESS_TOKEN   = the bot's PAT
+#        var     BORG_EVAL_API_BASE_URL   = staging accounts-api base
+#        var     BORG_EVAL_APP_URL        = staging app base
+#   (These are provisioned by infra's turborg-manage Pulumi stack.)
+#
+# A PAT is the right credential here: it's static and non-rotating, so unlike a
+# refresh token it can't go stale after one run. borg consumes it via
+# BORG_ACCESS_TOKEN — used directly as the bearer, no OAuth flow, no
+# credentials.json, never refreshed.
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC daily — no input, so it evals chuppa only
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model(s) to eval"
+        type: choice
+        default: chuppa
+        options:
+          - chuppa # default — strongest coding model, cheap
+          - floko # cheapest, for a quick/cheap signal
+          - floko,chuppa # both — side-by-side comparison (≈2× the spend)
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    env:
+      BORG_ACCESS_TOKEN: ${{ secrets.BORG_EVAL_ACCESS_TOKEN }}
+      BORG_API_BASE_URL: ${{ vars.BORG_EVAL_API_BASE_URL }}
+      BORG_APP_URL: ${{ vars.BORG_EVAL_APP_URL }}
+    steps:
+      - name: Guard — require the eval credential
+        id: guard
+        run: |
+          if [ -z "$BORG_ACCESS_TOKEN" ]; then
+            echo "::notice::BORG_EVAL_ACCESS_TOKEN not set — skipping the live nightly eval."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.guard.outputs.run == 'true'
+
+      - uses: actions/setup-go@v6
+        if: steps.guard.outputs.run == 'true'
+        with:
+          go-version-file: go.mod
+
+      - name: Run the live eval
+        if: steps.guard.outputs.run == 'true'
+        env:
+          BORG_EVAL: "1"
+          # Manual runs pick from the dropdown; the nightly schedule sends no
+          # input, so it falls back to chuppa only (cheap, our strongest model).
+          BORG_EVAL_MODELS: ${{ github.event.inputs.model || 'chuppa' }}
+          # Token-frugal defaults live in the test (effort=none, 16-step cap,
+          # parallel). The nightly SCHEDULE additionally runs only a cheap
+          # curated subset for a daily heartbeat; a manual run sends no value, so
+          # it covers the FULL corpus.
+          BORG_EVAL_TASKS: ${{ github.event_name == 'schedule' && 'fix-compile-error,fix-off-by-one,fix-failing-test,grep-and-fix' || '' }}
+          BORG_EVAL_REPORT: ${{ github.workspace }}/eval-report.txt
+        # -timeout 60m: a full-corpus run (esp. floko,chuppa = 22 multi-step
+        # task-runs against the real proxy) far exceeds `go test`'s 10m default —
+        # without this it gets SIGQUIT'd mid-run. The credit budget is the real
+        # spend cap; GitHub's own 6h job limit bounds wall-clock.
+        run: go test -count=1 -timeout 60m -run Eval -v ./internal/eval/...
+
+      - name: Render the report to the run summary
+        # Show the graphs + regression check + per-task tables right on the run's
+        # summary page (no artifact download needed). The ASCII report goes in a
+        # code block so the bars/tables keep their alignment.
+        if: ${{ always() && steps.guard.outputs.run == 'true' }}
+        run: |
+          {
+            echo '## Eval report'
+            echo '```text'
+            cat eval-report.txt 2>/dev/null || echo "(no report produced)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the eval report
+        if: ${{ always() && steps.guard.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval-report.txt
+          if-no-files-found: ignore

@@ -1,0 +1,36 @@
+# Build artifacts
+bin/
+dist/
+
+# Test / coverage
+coverage.out
+coverage.html
+*.test
+*.prof
+
+# Local environment
+.env
+.envrc
+
+# Local credentials (never commit a real token store)
+credentials.json
+
+# Local-only design notes + coding-agent scratch. BORG.md (this repo's own
+# agent context file, written by `borg learn`) is intentionally NOT ignored —
+# it is meant to be committed.
+CLAUDE.md
+PLAN-*.md
+.claude/
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compiled root binary
+/borg
