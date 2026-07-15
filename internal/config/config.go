@@ -161,6 +161,9 @@ func Load() (*Config, error) {
 	if err := c.deriveEndpoint(); err != nil {
 		return nil, err
 	}
+	if err := c.validateModel(); err != nil {
+		return nil, err
+	}
 	return &c, nil
 }
 

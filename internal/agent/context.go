@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/turborg/borg/internal/config"
 	"github.com/turborg/borg/internal/llm"
 )
 
@@ -13,10 +14,15 @@ import (
 // it's unreachable). The server's `max_input_tokens` is authoritative (see
 // SetModelWindows); this table just keeps /context sensible before the first
 // /models call. Floko (gemma-class) ~256k; the Chuppa/Axiom (DeepSeek-V4) tiers 1M.
+// Keyed by the codename constants rather than string literals so there is one
+// list of what a codename is (config.Codenames) — the same list config validates
+// BORG_MODEL against off-platform. A codename with no entry here just falls back
+// to defaultContextWindow until the catalog answers, which is why this map is a
+// subset rather than a mirror.
 var modelContextWindows = map[string]int{
-	"floko":  262_144,
-	"chuppa": 1_048_576,
-	"axiom":  1_048_576,
+	config.CodenameFloko:  262_144,
+	config.CodenameChuppa: 1_048_576,
+	config.CodenameAxiom:  1_048_576,
 }
 
 // defaultContextWindow is the assumed window for an xShellz model not in the

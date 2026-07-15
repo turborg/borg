@@ -43,6 +43,7 @@ func TestLoadProviderDefaultBaseURLs(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			clearProviderEnv(t)
 			t.Setenv("BORG_PROVIDER", provider)
+			t.Setenv("BORG_MODEL", "qwen2.5-coder:7b") // not about the model; a codename is rejected off-platform
 			c, err := Load()
 			require.NoError(t, err)
 			require.True(t, c.BringYourOwn())
@@ -59,6 +60,7 @@ func TestLoadProviderDefaultBaseURLs(t *testing.T) {
 func TestLoadExplicitBaseURL(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("BORG_PROVIDER", "ollama")
+	t.Setenv("BORG_MODEL", "qwen2.5-coder:7b")
 	t.Setenv("BORG_BASE_URL", "http://gpu-box:8000/v1/")
 	c, err := Load()
 	require.NoError(t, err)
@@ -69,6 +71,7 @@ func TestLoadExplicitBaseURL(t *testing.T) {
 func TestLoadCustomRequiresBaseURL(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("BORG_PROVIDER", "custom")
+	t.Setenv("BORG_MODEL", "some-local-model")
 	_, err := Load()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "BORG_BASE_URL")
@@ -94,6 +97,7 @@ func TestLoadRejectsUnknownProvider(t *testing.T) {
 func TestLoadProviderIsCaseInsensitive(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("BORG_PROVIDER", "  OLLAMA ")
+	t.Setenv("BORG_MODEL", "qwen2.5-coder:7b")
 	c, err := Load()
 	require.NoError(t, err)
 	require.Equal(t, ProviderOllama, c.Provider)
@@ -159,6 +163,7 @@ func TestBringYourOwnZeroValue(t *testing.T) {
 func TestApplyEndpointFallbackLeavesByoAlone(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("BORG_PROVIDER", "ollama")
+	t.Setenv("BORG_MODEL", "qwen2.5-coder:7b") // not about the model; a codename is rejected off-platform
 	c, err := Load()
 	require.NoError(t, err)
 	c.ApplyEndpointFallback("https://api.local.xshellz.com", "https://app.local.xshellz.com")
@@ -171,6 +176,7 @@ func TestApplyEndpointFallbackLeavesByoAlone(t *testing.T) {
 func TestHostedPinsToTheProxy(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("BORG_PROVIDER", "ollama")
+	t.Setenv("BORG_MODEL", "qwen2.5-coder:7b") // not about the model; a codename is rejected off-platform
 	c, err := Load()
 	require.NoError(t, err)
 	require.Equal(t, "http://localhost:11434/v1", c.LLMProxyURL)
@@ -267,6 +273,7 @@ func TestXShellzTokenNeverLeavesTheHostedProvider(t *testing.T) {
 			t.Setenv(EnvAccessToken, "xshellz-pat-secret")
 			t.Setenv("BORG_PROVIDER", p)
 			t.Setenv("BORG_BASE_URL", "http://127.0.0.1:1/v1")
+			t.Setenv("BORG_MODEL", "qwen2.5-coder:7b") // this test is about the key, not the model
 			c, err := Load()
 			require.NoError(t, err)
 			require.Empty(t, c.APIKey, "%s must not be sent the xShellz PAT", p)
@@ -289,6 +296,7 @@ func TestExplicitKeyIsHonoredOffPlatform(t *testing.T) {
 	t.Setenv(EnvAccessToken, "xshellz-pat-secret")
 	t.Setenv(EnvAPIKey, "sk-users-own")
 	t.Setenv("BORG_PROVIDER", ProviderOpenRouter)
+	t.Setenv("BORG_MODEL", "gpt-4o")
 	c, err := Load()
 	require.NoError(t, err)
 	require.Equal(t, "sk-users-own", c.APIKey)
@@ -302,4 +310,68 @@ func TestHostedDropsTheByoKey(t *testing.T) {
 	require.Empty(t, h.APIKey, "an OpenAI key must not ride along to xShellz")
 	require.Empty(t, h.APIKeyEnv)
 	require.Equal(t, "sk-users-own", c.APIKey, "the original config is untouched")
+}
+
+// BORG_MODEL defaults to a codename, so the first run of the exact setup this
+// feature exists for — BORG_PROVIDER=ollama and nothing else — used to post
+// {"model":"chuppa"} at the user's daemon and return `model 'chuppa' not found`:
+// a 404 naming a hosted catalog entry during a fully local session.
+func TestCodenameIsRejectedOffPlatform(t *testing.T) {
+	for _, name := range Codenames {
+		t.Run(name, func(t *testing.T) {
+			clearProviderEnv(t)
+			t.Setenv("BORG_PROVIDER", ProviderOllama)
+			t.Setenv("BORG_MODEL", name)
+			_, err := Load()
+			require.Error(t, err, "a codename means nothing to ollama")
+			require.Contains(t, err.Error(), "codename")
+			require.Contains(t, err.Error(), "BORG_MODEL", "the error must name the knob that fixes it")
+			require.Contains(t, err.Error(), ProviderOllama)
+		})
+	}
+}
+
+// The untouched default is the case that actually bites: nothing set but the provider.
+func TestDefaultModelIsRejectedOffPlatform(t *testing.T) {
+	clearProviderEnv(t) // the point is the UNTOUCHED default, so nothing may be pre-set
+	t.Setenv("BORG_PROVIDER", ProviderOllama)
+	_, err := Load()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "chuppa", "the default is a codename and must not reach a local daemon")
+}
+
+// A real model id is what borg is being pointed at — it must load cleanly.
+func TestRealModelIsFineOffPlatform(t *testing.T) {
+	for _, m := range []string{"qwen2.5-coder:7b", "llama3.1:8b", "gpt-4o", "deepseek/deepseek-v4"} {
+		t.Setenv("BORG_PROVIDER", ProviderOllama)
+		t.Setenv("BORG_MODEL", m)
+		c, err := Load()
+		require.NoError(t, err, m)
+		require.Equal(t, m, c.Model)
+	}
+}
+
+// The hosted path is unchanged: a codename is exactly what belongs there.
+func TestCodenamesStillWorkOnXShellz(t *testing.T) {
+	for _, name := range Codenames {
+		t.Setenv("BORG_PROVIDER", ProviderXShellz)
+		t.Setenv("BORG_MODEL", name)
+		c, err := Load()
+		require.NoError(t, err, "%s is a hosted model", name)
+		require.Equal(t, name, c.Model)
+	}
+	// ...including the default, untouched.
+	t.Setenv("BORG_PROVIDER", ProviderXShellz)
+	require.NoError(t, os.Unsetenv("BORG_MODEL"))
+	c, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, CodenameChuppa, c.Model)
+}
+
+func TestIsCodename(t *testing.T) {
+	require.True(t, IsCodename("chuppa"))
+	require.True(t, IsCodename("  CHUPPA  "), "matched case- and space-insensitively, like BORG_PROVIDER")
+	require.False(t, IsCodename("qwen2.5-coder:7b"))
+	require.False(t, IsCodename(""))
+	require.False(t, IsCodename("chuppa-ish"))
 }

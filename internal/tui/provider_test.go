@@ -96,3 +96,18 @@ func TestInfoLineOmitsEmptyPlan(t *testing.T) {
 	require.Contains(t, out, "qwen2.5-coder:7b")
 	require.Contains(t, out, "✓", "your own models are never shown as locked")
 }
+
+// The concern is a local run leaking account UI. Tier() reports "" off-platform
+// (see llm.Client.Tier for why it's "" rather than an error), and the banner keys
+// off that — so the plan badge is absent, not blank. Pinned because "never mention
+// an account the user doesn't have" is the rule this whole path exists to keep.
+func TestLocalBannerShowsNoAccountUI(t *testing.T) {
+	m := newLocalTestModel(t)
+	m.tier = "" // what Tier() yields on a bring-your-own backend
+	m.models = []llm.ModelInfo{{ID: "qwen2.5-coder:7b", Label: "qwen2.5-coder:7b", Available: true}}
+	out := ansiRE.ReplaceAllString(m.infoLine(), "")
+	require.NotContains(t, out, "plan")
+	require.NotContains(t, out, "free")
+	require.NotContains(t, out, "credits")
+	require.NotContains(t, out, "login")
+}

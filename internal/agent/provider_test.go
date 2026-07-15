@@ -278,3 +278,13 @@ func TestLocalErrorsNeverMentionLogin(t *testing.T) {
 	require.NotContains(t, strings.ToLower(err.Error()), "auth login")
 	require.Contains(t, err.Error(), "BORG_API_KEY")
 }
+
+// The context-window table keys off config.Codenames, which is the single list of
+// what a codename is — the same one config validates BORG_MODEL against. A key
+// here that isn't a codename would mean the two had drifted, and a window silently
+// aimed at a model config would reject.
+func TestContextWindowKeysAreAllCodenames(t *testing.T) {
+	for name := range modelContextWindows {
+		require.True(t, config.IsCodename(name), "%q is keyed as a hosted model but config doesn't know it as a codename", name)
+	}
+}

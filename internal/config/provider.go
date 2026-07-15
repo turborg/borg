@@ -35,6 +35,37 @@ const (
 // picker cycles them.
 var Providers = []string{ProviderXShellz, ProviderOllama, ProviderOpenAI, ProviderOpenRouter, ProviderCustom}
 
+// The xShellz model codenames. They are stable public names for models the proxy
+// resolves to real weights, so they mean something ONLY to the hosted backend —
+// nobody else's server has heard of "chuppa".
+//
+// This is the single source for the list. It lives here because config is the
+// lowest layer: the agent's context-window table keys off these, and the agent
+// imports config (never the reverse), so anywhere else would be a cycle.
+const (
+	CodenameFloko       = "floko"
+	CodenameChuppa      = "chuppa"
+	CodenameChuppaFlash = "chuppa_flash"
+	CodenameChuppaPro   = "chuppa_pro"
+	CodenameAxiom       = "axiom"
+)
+
+// Codenames lists every xShellz codename, for callers that must tell a codename
+// apart from a real model id.
+var Codenames = []string{CodenameFloko, CodenameChuppa, CodenameChuppaFlash, CodenameChuppaPro, CodenameAxiom}
+
+// IsCodename reports whether model is an xShellz codename rather than a model id
+// a backend could actually serve.
+func IsCodename(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	for _, c := range Codenames {
+		if m == c {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidProvider reports whether name is a known provider kind.
 func ValidProvider(name string) bool {
 	for _, p := range Providers {
@@ -78,6 +109,27 @@ func (c *Config) normalizeProvider() error {
 // BringYourOwn reports whether the active provider is a user-supplied backend
 // rather than the hosted xShellz proxy.
 func (c *Config) BringYourOwn() bool { return c.Provider != "" && c.Provider != ProviderXShellz }
+
+// validateModel rejects an xShellz codename on a backend that has never heard of
+// one. BORG_MODEL defaults to a codename, so without this the FIRST run of the
+// people this feature exists for — `BORG_PROVIDER=ollama`, nothing else set —
+// posts {"model":"chuppa"} at their daemon and gets back `model 'chuppa' not
+// found`: a 404 naming a hosted catalog entry in the middle of a fully local
+// session, with nothing to tell them the fix is BORG_MODEL. Catching it in config
+// turns that into one sentence, before a request is ever built.
+//
+// It fires on any codename, not just the default, so a name copy-pasted out of
+// the hosted docs is caught the same way.
+func (c *Config) validateModel() error {
+	if !c.BringYourOwn() || !IsCodename(c.Model) {
+		return nil
+	}
+	hint := "e.g. BORG_MODEL=gpt-4o"
+	if c.Provider == ProviderOllama {
+		hint = "e.g. BORG_MODEL=qwen2.5-coder:7b — `ollama list` shows what you have"
+	}
+	return fmt.Errorf("BORG_MODEL=%q is an xShellz model codename and means nothing to your %s backend — set it to a model %s actually serves (%s)", c.Model, c.Provider, c.Provider, hint)
+}
 
 // Hosted returns a copy of c pinned to the xShellz backend, with the metered-proxy
 // endpoint re-derived (still honoring an explicit BORG_LLM_PROXY_URL).

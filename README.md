@@ -137,6 +137,9 @@ history, copy-paste, and resize all behave normally.
 ### Your own
 
 Any model your backend serves, named exactly as it names it (`BORG_MODEL=qwen2.5-coder:14b`).
+**`BORG_MODEL` has no useful default off-platform** — it defaults to a hosted codename, which your
+backend has never heard of — so borg asks for one up front rather than letting your server answer
+`model 'chuppa' not found`.
 
 **Tool-calling is the real gate**, not size or benchmark scores. borg's loop is tools-first: it
 works by calling `read_file`, `edit_file`, `bash` and friends, so a model that can't emit reliable

@@ -229,6 +229,15 @@ func (c *Client) UserInfo(ctx context.Context) (*UserInfo, error) {
 // Tier returns the caller's plan code (free, starter, pro, max) from
 // /v1/users/me; an absent plan reports as "free". Off-platform there are no plans
 // to gate on, so it returns "" (no request) and callers render no plan line.
+//
+// It reports no-plan as an empty string while Usage and SubmitFeedback report the
+// same condition as ErrNoMetering, which looks inconsistent and isn't: "no plan"
+// is a truthful answer that every caller already renders as nothing, whereas
+// there is no honest zero value for usage — a zeroed AccountUsage would render
+// "0 / 0 credits", stating a budget the user does not have. So the one with a
+// meaningful empty value returns it, and the ones without must error. Making this
+// error too would force callers to handle a non-exceptional case and change no
+// behaviour.
 func (c *Client) Tier(ctx context.Context) (string, error) {
 	if !c.caps.AccountEndpoints {
 		return "", nil
