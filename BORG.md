@@ -32,7 +32,7 @@ make eval                 # eval suite in Docker (needs auth for live evals; cas
 
 The binary installs as `turborg` and symlinks as `borg` when that name is free (won't clobber BorgBackup). Both names are the same binary; it brands itself via `argv[0]`.
 
-**Deployment** is fully automated: Conventional Commits on `staging` → squash-merge → `staging→main` auto-PR → release-please bumps the version & tag → GoReleaser cross-compiles → `wrangler r2 object put` publishes to `dl.turborg.com/<version>/` and `dl.turborg.com/latest/`.
+**Deployment** is fully automated: Conventional Commits squash-merged into `main` → release-please bumps the version & tag → GoReleaser cross-compiles → `wrangler r2 object put` publishes to `dl.turborg.com/<version>/` and `dl.turborg.com/latest/`.
 
 ## Verify
 
@@ -58,12 +58,12 @@ make docker-test
 | `internal/account/` | Best-effort cache of plan tier + model catalog (`~/.config/borg/account.json`, 0600) so the REPL paints instantly on startup. |
 | `internal/version/` | Single `var Version = "dev"` (overridden by `-ldflags` at release); `Command()` derives the brand from `argv[0]` ("turborg" or "borg"). |
 | `dev/` | Architecture docs: `agent-loop.md` (Mermaid diagram + detailed per-node notes on the agent loop), `eval-state.md` (latest live-eval scorecard). |
-| `.github/workflows/` | CI (`ci.yml` — lint + race tests + coverage gate), `release.yml` (release-please + GoReleaser + R2 publish), `staging-to-main-pr.yml` (auto PR), `nightly-eval.yml` (token-spending live eval on schedule). |
+| `.github/workflows/` | CI (`ci.yml` — lint + race tests + coverage gate), `release.yml` (release-please + GoReleaser + R2 publish), `cla.yml` (contributor licence bot), `nightly-eval.yml` (token-spending live eval on schedule). |
 | `bin/` | Build output: `bin/borg` (the binary) + `bin/turborg` (symlink — same binary). |
 
 ## Conventions
 
-- **Branching:** PRs target `staging`, not `main`. Squash-merge into `staging`. `main` receives merge commits from the auto `staging→main` PR. Work on `feat/`, `fix/`, `docs/`, `refactor/`, `chore/` branches.
+- **Branching:** trunk-based. One long-lived branch, `main`. PRs target `main` and are squash-merged, so history stays linear. Work on `feat/`, `fix/`, `docs/`, `refactor/`, `chore/` branches.
 - **Commit messages:** PR titles follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `refactor:`, `chore:`, `ci:`, `test:`). The squash-merge inherits the PR title. **Do NOT** include `Co-Authored-By: Claude` or any AI co-author trailer in commits to *this* repo.
 - **Testing:** Every package uses `goleak.VerifyTestMain(m)` for goroutine-leak detection. Tests run with `-race -count=1`. Total coverage across `internal/` must be ≥90% (enforced by `go-test-coverage` — `cmd/borg` and `internal/version` are excluded). The REPL is tested by driving `Update`/`View` directly, not via a live Bubble Tea program.
 - **Generality:** The agent harness must never hardcode a language, toolchain, or command name. It discovers a project's build/test/run commands at runtime from its own files (BORG.md, project manifests). Harness logic may key only on *general, project-agnostic signals*.
@@ -108,7 +108,7 @@ make docker-test
 ### CI & release
 
 - **CI runs tests natively (not in Docker)** because the GitHub Actions runner is an ephemeral VM — the host-protection rationale doesn't apply. Locally, always use `make docker-test`.
-- **The auto `staging→main` PR is refreshed on every push** to `staging` and its body is auto-generated — never hand-edit it. It uses `gh pr create`/`gh pr edit`.
+- **Branch protection on `main`** requires the `lint`, `test` and `cla-check` contexts plus linear history, and blocks force-push. First-time contributors are prompted by the CLA bot to sign before a PR can merge.
 - **Release uses a PAT (`RELEASE_PLEASE_TOKEN`)**, not `GITHUB_TOKEN`, so release-please's PRs trigger CI (GitHub-token-created PRs don't).
 - **No manual `git tag`** — release-please drives all versioning. GoReleaser's `release.disable: true` in `.goreleaser.yml` means no GitHub Release is created by GoReleaser (release-please owns the tag); publish goes to R2 via `wrangler r2 object put`.
 - **CHANGELOG.md carries no PR/commit links.** The repo's git history starts at a squashed initial commit, so links to pre-open-source SHAs and issue numbers would 404 — and worse, the issue numbers would eventually resolve to unrelated PRs as new ones land.

@@ -169,5 +169,4 @@
 * how to run the live eval against the LOCAL env (host go test + PAT)
 * record the slim authorize contract + large-context chain caps
 * require Docker for build/test; add docker-bin extract target
-* standing rule — ship to staging, never main (don't ask to promote)
 * sync project docs with the per-account credit budget
