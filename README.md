@@ -1,7 +1,7 @@
 <h1 align="center">borg</h1>
 
 <p align="center">
-  <strong>A small, fast AI coding agent for your terminal — with no provider API key on your machine.</strong>
+  <strong>A small, fast AI coding agent for your terminal. Bring your own model, or use ours.</strong>
 </p>
 
 <p align="center">
@@ -13,10 +13,14 @@
 ---
 
 borg reads and edits your files, runs your commands, and works a task until it's done and verified —
-the way you'd expect a terminal coding agent to. The difference is where the model lives: borg logs
-in to [xShellz](https://www.xshellz.com) over OAuth and runs every model call through a **metered
-proxy**, so **no provider API key is ever stored on your laptop**, and usage is billed against your
-plan instead of a raw token bucket you have to manage.
+the way you'd expect a terminal coding agent to.
+
+It talks to **any OpenAI-compatible backend**. Point it at [Ollama](https://ollama.com), LM Studio,
+llama.cpp, OpenAI, or OpenRouter and it runs against your models, your endpoint, your key — nothing
+of yours reaches us. Or log in to [xShellz](https://www.xshellz.com) and use the hosted models
+instead: model calls then go through a **metered proxy**, which means no provider key on your
+machine and usage billed against a plan rather than a token bucket you have to manage. That's the
+only difference between the two — same agent, same tools, same loop.
 
 It's a **single static Go binary** — roughly 18 MB, no runtime, no `node_modules`, and it idles in
 the low tens of MB of RAM.
@@ -41,9 +45,44 @@ Prefer to build it yourself? See [Development](#development).
 
 ## Quick start
 
+### With your own model (Ollama)
+
+Nothing to sign up for and no key. Your code, prompts and model calls stay on your machine:
+
+```bash
+ollama pull qwen2.5-coder:7b
+export BORG_PROVIDER=ollama
+export BORG_MODEL=qwen2.5-coder:7b
+turborg                     # start the REPL in the current directory
+```
+
+Or persist it, so you don't need the exports:
+
+```bash
+turborg settings set provider ollama
+turborg settings set model qwen2.5-coder:7b
+```
+
+Any other OpenAI-compatible server works the same way — give it the API root, including `/v1`:
+
+```bash
+turborg settings set provider custom
+turborg settings set base_url http://localhost:1234/v1   # LM Studio, llama.cpp, vLLM, a gateway…
+```
+
+For a hosted gateway, the key comes from the environment — borg never writes one to disk:
+
+```bash
+export BORG_PROVIDER=openrouter
+export BORG_API_KEY="$OPENROUTER_API_KEY"
+# or: turborg settings set api_key_env OPENROUTER_API_KEY   # stores the NAME, never the key
+```
+
+### With the hosted models (xShellz)
+
 ```bash
 turborg auth login          # opens your browser; use --device on a headless box or over SSH
-turborg                     # start the REPL in the current directory
+turborg
 ```
 
 On first run in a directory, borg asks whether to trust it. The root you grant **scopes the editing
@@ -72,9 +111,15 @@ history, copy-paste, and resize all behave normally.
 
 ## What makes it different
 
-- **No API key on disk.** OAuth (PKCE loopback, or the RFC 8628 device grant for headless hosts).
-  The only credential stored is an xShellz token pair in `~/.config/borg/credentials.json` (`0600`),
-  revocable from your account's devices page.
+- **No backend lock-in.** The agent, the tools, and the loop are the same wherever the model runs;
+  the backend is one setting. Pointed at a local model, borg needs no login and no account, and your
+  code and prompts go to that model and nowhere else. (borg does check for a new release once a day,
+  which sends nothing but the request — `/update` and `turborg update` do the installing.)
+- **A key never lands on disk.** borg reads a provider key from the environment only
+  (`BORG_API_KEY`, or `api_key_env` to name a variable you already export) — there is no code path
+  that writes one to a config file. On the hosted backend there's no provider key at all: OAuth
+  (PKCE loopback, or the RFC 8628 device grant for headless hosts) stores only an xShellz token
+  pair in `~/.config/borg/credentials.json` (`0600`), revocable from your account's devices page.
 - **Tools run locally; only inference is remote.** Reads, edits, greps, and shell commands happen on
   your machine. Mutating tools are permission-gated per call.
 - **Your context is never silently compacted.** borg will not lossily summarize your conversation
@@ -89,18 +134,77 @@ history, copy-paste, and resize all behave normally.
 
 ## Models
 
-borg exposes models under stable codenames, so the underlying open-weights model can improve without
-breaking your workflow:
+### Your own
 
-| Codename | Role | Context | Plans |
-|----------|------|---------|-------|
-| **Chuppa Flash** | Everyday coding — the default | 1M | All |
-| **Chuppa Pro** | Harder, multi-step work | 1M | Starter and up |
-| **Floko** | General / chat | 256k | All |
-| **Axiom** | The hardest problems, deep reasoning | — | Pro and up |
+Any model your backend serves, named exactly as it names it (`BORG_MODEL=qwen2.5-coder:14b`).
+**`BORG_MODEL` has no useful default off-platform** — it defaults to a hosted codename, which your
+backend has never heard of — so borg asks for one up front rather than letting your server answer
+`model 'chuppa' not found`.
 
-All are open-weights models. Usage draws from one shared daily pool on your plan — see
-[turborg.com/pricing](https://turborg.com/pricing). `/usage` shows what you've spent.
+**Tool-calling is the real gate**, not size or benchmark scores. borg's loop is tools-first: it
+works by calling `read_file`, `edit_file`, `bash` and friends, so a model that can't emit reliable
+structured tool calls can't drive it, however well it writes code in a chat window. If a model
+returns nothing at all, borg says so and names this as the likely cause rather than spinning.
+
+| Model | Notes |
+|---|---|
+| **qwen2.5-coder** 7b | Works. The smallest we'd suggest; expect to keep tasks narrow. |
+| **qwen2.5-coder** 14b / 32b | The sweet spot for local use — solid tool-calling, handles multi-step tasks. |
+| **llama3.1** 8b+ | Works. Tool-calling is decent; weaker at long multi-file tasks. |
+| **mistral-nemo** | Works. Similar profile to llama3.1 8b. |
+
+Hosted frontier models via OpenAI/OpenRouter work too, and are the strongest option — you're just
+paying that provider directly instead of us.
+
+Two things to set for a local model:
+
+- **`BORG_CONTEXT`** — borg can't ask a local server how big your model's window is, so it assumes a
+  conservative **32k**. If yours is bigger, say so (`BORG_CONTEXT=131072`); if you don't, you only
+  lose window, never correctness.
+- **Reasoning knobs are off.** `/think` and `/effort` are hosted-only — those fields aren't portable
+  and most local servers reject a request carrying them outright.
+
+Expect the **first reply of a turn to be slow** on CPU. borg's system prompt plus tool schemas is a
+large prompt (~18 KB), and prefill has to chew through all of it before the first token appears —
+minutes, on a big model without a GPU. borg waits up to **10 minutes** for that first byte on a
+backend you run (versus 2 against the hosted proxy, where a slow prefill means something's broken).
+If that's still not enough, raise it with **`BORG_TTFB`** (e.g. `BORG_TTFB=20m`). It bounds only the
+wait *before* the first byte — never generation, which can take as long as it takes.
+
+### Hosted (xShellz)
+
+Stable codenames, so the underlying model can improve without breaking your workflow. They're all
+open-weights models, and there's no reason to be coy about which:
+
+| Codename | Weights | Role | Context | Plans |
+|----------|---------|------|---------|-------|
+| **Chuppa Flash** | DeepSeek-V4 Flash | Everyday coding — the default | 1M | All |
+| **Chuppa Pro** | DeepSeek-V4 Pro | Harder, multi-step work | 1M | Starter and up |
+| **Floko** | Gemma-class (MoE) | General / chat | 256k | All |
+| **Axiom** | DeepSeek-V4 | The hardest problems, deep reasoning | — | Pro and up |
+
+Usage draws from one shared daily pool on your plan — see
+[turborg.com/pricing](https://turborg.com/pricing). `/usage` shows what you've spent. (`/usage` and
+the plan display are hosted-only: there's nothing for us to meter when you bring your own backend.)
+
+## Configuration
+
+Settings persist in `~/.config/borg/settings.json` (`0600`) and are edited with `/settings` in the
+REPL or `turborg settings list|get|set` from the shell. An explicit `export` always wins over the
+file, so a one-off `BORG_PROVIDER=ollama turborg …` works without changing anything saved.
+
+| Setting | Env | Default | |
+|---|---|---|---|
+| `provider` | `BORG_PROVIDER` | `xshellz` | `xshellz`, `ollama`, `openai`, `openrouter`, `custom` |
+| `base_url` | `BORG_BASE_URL` | per provider | OpenAI-compatible API root, **including `/v1`** |
+| `model` | `BORG_MODEL` | `chuppa` | model new sessions start on |
+| `context` | `BORG_CONTEXT` | auto | context window in tokens (see above) |
+| `api_key_env` | `BORG_API_KEY_ENV` | — | **name** of the env var holding your key |
+| — | `BORG_API_KEY` | — | the key itself — **env only, never a setting** |
+
+`BORG_API_KEY` has no `settings.json` entry and never will: borg will not write a credential to
+disk, and refuses to read one from there even if you put it in by hand. `BORG_ACCESS_TOKEN` is an
+alias of it, kept for CI.
 
 ## Development
 

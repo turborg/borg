@@ -14,6 +14,7 @@ import (
 	"github.com/turborg/borg/internal/agent"
 	"github.com/turborg/borg/internal/auth"
 	"github.com/turborg/borg/internal/config"
+	"github.com/turborg/borg/internal/llm"
 	"github.com/turborg/borg/internal/session"
 	"github.com/turborg/borg/internal/trust"
 	"github.com/turborg/borg/internal/tui"
@@ -77,9 +78,11 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
-// newAuthedAgent loads config, targets the token's environment, requires a
-// logged-in session, and returns a ready agent. Shared by the REPL/one-shot path
-// and `borg install`.
+// newAuthedAgent loads config and returns a ready agent for the configured
+// provider: on the hosted xShellz backend it targets the token's environment and
+// requires a logged-in session; on a bring-your-own backend there is no account
+// to log in to, so it wires the user's own endpoint and key straight through.
+// Shared by the REPL/one-shot path and `borg install`.
 func newAuthedAgent(ctx context.Context, model string, think bool) (*agent.Agent, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -87,6 +90,16 @@ func newAuthedAgent(ctx context.Context, model string, think bool) (*agent.Agent
 	}
 	if model != "" {
 		cfg.Model = model
+	}
+	// A backend the user brought needs no login, so borg must never ask for one:
+	// there is no xShellz account in the picture, and telling someone running a
+	// local model to authenticate would be both wrong and impossible to satisfy.
+	// The whole auth stack is skipped — not just the error — so nothing here can
+	// read, refresh, or complain about credentials that aren't part of this setup.
+	if !llm.CapabilitiesFor(cfg.Provider).RequiresAuth {
+		ag := agent.NewWithLLM(cfg, llm.New(cfg, cfg.APIKey))
+		ag.SetThink(think)
+		return ag, nil
 	}
 	// Target the environment the stored token came from (unless env-overridden).
 	if creds, cerr := auth.LoadCredentials(); cerr == nil {

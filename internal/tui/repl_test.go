@@ -1611,21 +1611,30 @@ func TestSettingsPicker(t *testing.T) {
 	require.Equal(t, modeSettingsPicker, m.mode)
 	require.Contains(t, vw(m), "settings —")
 
-	// Enter on the first row (escalate_model, an enum) cycles it and stays open.
-	require.Equal(t, "escalate_model", config.Settings[0].Key)
+	// Enter on the enum "escalate_model" row cycles it in place and stays open.
+	// (Rows are located by key, not by index: the registry's order is free to
+	// change without this test having to care.)
+	settingRow := func(key string) int {
+		for i, s := range config.Settings {
+			if s.Key == key {
+				return i
+			}
+		}
+		t.Fatalf("no %q setting in the registry", key)
+		return -1
+	}
+	escIdx := settingRow("escalate_model")
+	for i := 0; i < escIdx; i++ {
+		m, _ = step(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
 	m, _ = step(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	require.Equal(t, modeSettingsPicker, m.mode)
 	require.Contains(t, m.status, "axiom")
 
 	// Down to the bool "think" row and toggle it in place.
-	thinkIdx := -1
-	for i, s := range config.Settings {
-		if s.Key == "think" {
-			thinkIdx = i
-		}
-	}
-	require.GreaterOrEqual(t, thinkIdx, 0)
-	for i := 0; i < thinkIdx; i++ {
+	thinkIdx := settingRow("think")
+	require.Greater(t, thinkIdx, escIdx, "this walk only moves down")
+	for i := escIdx; i < thinkIdx; i++ {
 		m, _ = step(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	require.False(t, m.agent.Think())

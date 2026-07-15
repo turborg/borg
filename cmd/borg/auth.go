@@ -55,8 +55,13 @@ func newAuthLoginCmd() *cobra.Command {
 
 // warmAccountCache fetches the plan tier + model catalog and stores them so the
 // next REPL launch shows them instantly. Best-effort: any error is ignored.
+//
+// It asks the HOSTED backend regardless of the configured provider: this cache is
+// the xShellz account's plan and catalog, which is what the login just
+// established — a local backend has neither, and would poison the cache with its
+// own model list if asked.
 func warmAccountCache(ctx context.Context, cfg *config.Config, token string) {
-	c := llm.New(cfg, token)
+	c := llm.New(cfg.Hosted(), token)
 	tier, errT := c.Tier(ctx)
 	models, errM := c.Models(ctx)
 	if errT != nil && errM != nil {

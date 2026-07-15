@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/turborg/borg/internal/config"
 	"github.com/turborg/borg/internal/llm"
 )
 
@@ -13,15 +14,31 @@ import (
 // it's unreachable). The server's `max_input_tokens` is authoritative (see
 // SetModelWindows); this table just keeps /context sensible before the first
 // /models call. Floko (gemma-class) ~256k; the Chuppa/Axiom (DeepSeek-V4) tiers 1M.
+// Keyed by the codename constants rather than string literals so there is one
+// list of what a codename is (config.Codenames) — the same list config validates
+// BORG_MODEL against off-platform. A codename with no entry here just falls back
+// to defaultContextWindow until the catalog answers, which is why this map is a
+// subset rather than a mirror.
 var modelContextWindows = map[string]int{
-	"floko":  262_144,
-	"chuppa": 1_048_576,
-	"axiom":  1_048_576,
+	config.CodenameFloko:  262_144,
+	config.CodenameChuppa: 1_048_576,
+	config.CodenameAxiom:  1_048_576,
 }
 
-// defaultContextWindow is the assumed window for a model not in the table and not
-// (yet) in the fetched catalog.
+// defaultContextWindow is the assumed window for an xShellz model not in the
+// table and not (yet) in the fetched catalog. Every model on the platform is at
+// least this big, so it's a safe floor there.
 const defaultContextWindow = 262_144
+
+// byoContextWindow is the assumed window for an unknown model on a
+// bring-your-own backend, which serves no catalog for borg to read the real one
+// from. It is deliberately CONSERVATIVE: the models people run themselves are
+// typically 8k–128k, and guessing high is the dangerous direction — borg would
+// keep appending to a conversation the server has already begun truncating from
+// the front, silently dropping the system prompt and the task while /context
+// happily reported 3% used. Guessing low only costs an early /compact nudge.
+// BORG_CONTEXT overrides it when you know your model's real window.
+const byoContextWindow = 32_768
 
 // SetModelWindows records each model's context-window cap from the live catalog
 // (GET /v1/llm/models), so ContextWindow reports the server-authoritative window
@@ -40,17 +57,29 @@ func (a *Agent) SetModelWindows(models []llm.ModelInfo) {
 }
 
 // ContextWindow returns the current model's maximum input context window in
-// tokens: the catalog value when known, else the offline fallback table, else a
-// conservative default.
+// tokens, in order of authority: an explicit BORG_CONTEXT override, the live
+// catalog, the offline codename table, then a per-backend conservative default.
 func (a *Agent) ContextWindow() int {
+	// An explicit override wins over everything, including the catalog: it exists
+	// for the case where borg CAN'T know the answer (a backend that serves no
+	// window) and for the case where it's been told wrong.
+	if a.cfg.ContextWindow > 0 {
+		return a.cfg.ContextWindow
+	}
 	model := strings.ToLower(a.cfg.Model)
 	if n, ok := a.modelWindows[model]; ok && n > 0 {
 		return n
 	}
-	if n, ok := modelContextWindows[model]; ok {
-		return n
+	// The codename table describes xShellz's own models. It must not be consulted
+	// off-platform: the codenames aren't reserved words, and a local model that
+	// happens to share a name would inherit a wildly wrong 1M window.
+	if !a.cfg.BringYourOwn() {
+		if n, ok := modelContextWindows[model]; ok {
+			return n
+		}
+		return defaultContextWindow
 	}
-	return defaultContextWindow
+	return byoContextWindow
 }
 
 // ContextStats is a snapshot of how much of the model's context window the

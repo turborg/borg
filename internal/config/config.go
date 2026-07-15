@@ -2,12 +2,23 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 )
+
+// EnvAccessToken is the ORIGINAL name for "the bearer to send to the active
+// provider" and remains a fully supported alias of BORG_API_KEY (CI workflows and
+// the eval bot set it, and infra provisions it — do not remove it). BORG_API_KEY
+// is the canonical name now that the bearer isn't always an xShellz token.
+const EnvAccessToken = "BORG_ACCESS_TOKEN"
+
+// EnvAPIKey is the canonical bearer env var for the active provider.
+const EnvAPIKey = "BORG_API_KEY"
 
 // DebugDefault reports whether BORG_DEBUG_ENABLED is set truthy. It's the default
 // for the --debug flag, so debug can be enabled via settings.json (the "debug"
@@ -43,8 +54,43 @@ func LearnStaleThreshold() int {
 // Config holds borg's runtime settings. Defaults point at the xShellz hosted
 // endpoints; every field is overridable via its BORG_* env var.
 type Config struct {
+	// Provider selects which OpenAI-compatible backend model calls go to:
+	// "xshellz" (the default hosted, metered proxy) or a bring-your-own backend
+	// you run or pay for yourself — see provider.go for the full list. The kind
+	// picks the default endpoint and which non-standard request fields are safe to
+	// send (llm.Capabilities); everything else about the agent is identical.
+	Provider string `env:"BORG_PROVIDER" envDefault:"xshellz"`
+
+	// BaseURL is the OpenAI-compatible API root — INCLUDING the /v1 suffix, e.g.
+	// http://localhost:11434/v1 — for a bring-your-own provider. Empty falls back
+	// to the kind's DefaultBaseURL. Ignored when Provider is xshellz, whose
+	// endpoint is LLMProxyURL (derived from the login's environment).
+	BaseURL string `env:"BORG_BASE_URL"`
+
+	// APIKey is the bearer sent to the ACTIVE provider — an OpenAI/OpenRouter key,
+	// or an xShellz personal access token in CI. It is deliberately env-only: it is
+	// never read from, or written to, settings.json (see settings.go), which is what
+	// keeps "no provider key on your machine" literally true for the default
+	// xShellz path. APIKeyEnv names an env var to read it from instead, so an
+	// existing export like OPENAI_API_KEY can be reused without copying the secret.
+	APIKey    string `env:"BORG_API_KEY"`
+	APIKeyEnv string `env:"BORG_API_KEY_ENV"`
+
+	// ContextWindow overrides the current model's context window, in tokens. It's
+	// the escape hatch for a bring-your-own backend, which serves no catalog for
+	// borg to read the real window from: a local 32k model told it has 1M would
+	// silently truncate the conversation instead of warning. 0 = auto-detect.
+	ContextWindow int `env:"BORG_CONTEXT"`
+
+	// TimeToFirstByte caps the wait for a model's first response header. 0 = pick
+	// by provider: a couple of minutes against the hosted proxy (where a slow
+	// prefill means a fault), but far longer for a backend the user runs, where
+	// prefill on CPU legitimately takes minutes and scales with prompt size. Raise
+	// it if a big local model on modest hardware still gets cut off; it only ever
+	// bounds the wait BEFORE the first byte, never the generation itself.
+	TimeToFirstByte time.Duration `env:"BORG_TTFB"`
+
 	// APIBaseURL is the accounts-api base used for the OAuth flows.
-	// TODO(borg): confirm the production hostname.
 	APIBaseURL string `env:"BORG_API_BASE_URL" envDefault:"https://api.xshellz.com"`
 
 	// AppURL is the xShellz web app base. The device flow sends users to its
@@ -108,8 +154,60 @@ func Load() (*Config, error) {
 	if err := env.Parse(&c); err != nil {
 		return nil, err
 	}
-	c.deriveLLMProxy()
+	if err := c.normalizeProvider(); err != nil {
+		return nil, err
+	}
+	c.resolveAPIKey()
+	if err := c.deriveEndpoint(); err != nil {
+		return nil, err
+	}
+	if err := c.validateModel(); err != nil {
+		return nil, err
+	}
 	return &c, nil
+}
+
+// resolveAPIKey fills APIKey from the first source that has it: BORG_API_KEY, then
+// the env var named by BORG_API_KEY_ENV (so an existing OPENAI_API_KEY export can
+// be reused without copying the secret anywhere). No source is a file: a key is
+// never read from settings.json.
+//
+// BORG_ACCESS_TOKEN is deliberately consulted ONLY on the hosted provider. It is
+// not a generic bearer despite the name it shares with one: it holds an xShellz
+// PAT, and CI, the eval bot and the documented local-eval workflow all export it.
+// Treating it as "the key for whatever backend is active" would mean that anyone
+// with it exported who then set BORG_PROVIDER=openrouter (or any other
+// third-party endpoint) would send their xShellz credential straight to that
+// vendor as a Bearer header. A credential is scoped to the service that issued
+// it; carrying it to a different one is never a convenience worth having.
+func (c *Config) resolveAPIKey() {
+	if c.APIKey == "" && c.APIKeyEnv != "" {
+		c.APIKey = strings.TrimSpace(os.Getenv(c.APIKeyEnv))
+	}
+	if c.APIKey == "" && !c.BringYourOwn() {
+		c.APIKey = strings.TrimSpace(os.Getenv(EnvAccessToken))
+	}
+}
+
+// deriveEndpoint resolves the endpoint the LLM client talks to for the active
+// provider: the metered proxy for xshellz, or the user's own OpenAI-compatible
+// root otherwise.
+func (c *Config) deriveEndpoint() error {
+	if !c.BringYourOwn() {
+		c.deriveLLMProxy()
+		return nil
+	}
+	if c.BaseURL == "" {
+		c.BaseURL = DefaultBaseURL(c.Provider)
+	}
+	if c.BaseURL == "" {
+		return fmt.Errorf("BORG_PROVIDER=%s needs BORG_BASE_URL — the OpenAI-compatible API root, including /v1 (e.g. http://localhost:8080/v1)", c.Provider)
+	}
+	// A bring-your-own backend has no metered proxy in front of it: the
+	// OpenAI-compatible root IS the endpoint, and /chat/completions + /models hang
+	// directly off it — exactly as they do off the proxy.
+	c.LLMProxyURL = strings.TrimRight(c.BaseURL, "/")
+	return nil
 }
 
 // deriveLLMProxy points the LLM proxy at {APIBaseURL}/v1/llm unless the operator
@@ -130,6 +228,9 @@ func (c *Config) ApplyEndpointFallback(apiBase, app string) {
 	}
 	if _, set := os.LookupEnv("BORG_APP_URL"); !set && app != "" {
 		c.AppURL = app
+	}
+	if c.BringYourOwn() {
+		return // the endpoint comes from BaseURL, not from a stored login
 	}
 	c.deriveLLMProxy()
 }
