@@ -42,12 +42,53 @@ type Setting struct {
 	Hot     bool        // applies to a running agent immediately (vs only on restart)
 }
 
-// Settings is the registry of user-tweakable settings. Endpoint/identity vars
-// (BORG_API_BASE_URL, BORG_OAUTH_CLIENT_ID, …) are intentionally absent: they're
-// set by `borg auth login` / the token's environment, and changing them mid-run is
-// a footgun. The model codename is also absent — it's per-session (`/model`) and
-// defaulted by BORG_MODEL; "auto-escalate model" is the global model knob here.
+// Settings is the registry of user-tweakable settings.
+//
+// Which backend borg talks to IS a user setting: `provider`, `base_url` and
+// `model` are registered here so pointing borg at your own Ollama/OpenAI/
+// OpenRouter/whatever endpoint is a first-class, persistent choice rather than an
+// export you have to remember. (This reverses an earlier stance that endpoint
+// knobs were a footgun to be kept out — that was written when the hosted proxy was
+// the only backend there was. Bring-your-own is now the feature, so the knobs are
+// part of the product.) The xShellz-account vars (BORG_API_BASE_URL, BORG_APP_URL,
+// BORG_OAUTH_CLIENT_ID) do stay out: those are set by `borg auth login` from the
+// token's own environment, so editing them by hand only ever desyncs them from the
+// stored token.
+//
+// The API key is NOT here, and must never be added — see secretEnv. `api_key_env`
+// holds the NAME of the env var to read the key from; the key itself only ever
+// lives in the environment.
 var Settings = []Setting{
+	{
+		Key: "provider", Env: "BORG_PROVIDER", Label: "Model provider",
+		Kind: KindEnum, Enum: Providers, Default: ProviderXShellz,
+		Desc: "which OpenAI-compatible backend to use: xshellz (hosted + metered) or your own",
+		Hot:  false, // the LLM client is built at startup from this
+	},
+	{
+		Key: "base_url", Env: "BORG_BASE_URL", Label: "Provider base URL",
+		Kind: KindString, Default: "",
+		Desc: "OpenAI-compatible API root incl. /v1 (e.g. http://localhost:11434/v1); empty = the provider's default",
+		Hot:  false,
+	},
+	{
+		Key: "api_key_env", Env: "BORG_API_KEY_ENV", Label: "API-key env var",
+		Kind: KindString, Default: "",
+		Desc: "NAME of the env var holding the provider's API key (e.g. OPENAI_API_KEY) — the key itself is never stored on disk",
+		Hot:  false,
+	},
+	{
+		Key: "model", Env: "BORG_MODEL", Label: "Default model",
+		Kind: KindString, Default: "chuppa",
+		Desc: "model new sessions start on (/model switches the current session)",
+		Hot:  false,
+	},
+	{
+		Key: "context", Env: "BORG_CONTEXT", Label: "Context window override",
+		Kind: KindInt, Default: "0",
+		Desc: "your model's context window in tokens; off = auto (the catalog, or a conservative guess on a backend that serves none)",
+		Hot:  false,
+	},
 	{
 		Key: "escalate_model", Env: "BORG_ESCALATE_MODEL", Label: "Auto-escalate model",
 		Kind: KindEnum, Enum: []string{"", "axiom"}, Default: "",
@@ -90,6 +131,18 @@ var Settings = []Setting{
 		Desc: "override the formatter run after each edit ({file} = path); empty = auto-detect the project's own formatter",
 		Hot:  true,
 	},
+}
+
+// secretEnv reports whether env names a CREDENTIAL, which settings.json must
+// never hold. borg's headline claim is that no provider key sits on your machine;
+// that stays literally true only if there is no code path that writes one to disk
+// or reads one back. The registry above deliberately has no key entry, so this is
+// belt-and-braces — but it's enforced rather than assumed, because "a key leaked
+// into a config file" is exactly the kind of thing a well-meaning later edit to
+// the registry would cause. A key is env-only, always; `api_key_env` names the
+// variable to read it from.
+func secretEnv(env string) bool {
+	return env == EnvAPIKey || env == EnvAccessToken
 }
 
 // SettingByKey looks up a setting by its friendly key.
@@ -173,6 +226,9 @@ func LoadSettingsFile() {
 		return
 	}
 	for _, s := range Settings {
+		if secretEnv(s.Env) {
+			continue // a credential is never loaded from disk, whatever the file says
+		}
 		v, ok := m[s.Key]
 		if !ok {
 			continue
@@ -229,6 +285,9 @@ func SetSetting(key, value string) (norm string, shadow bool, err error) {
 	s, ok := SettingByKey(key)
 	if !ok {
 		return "", false, fmt.Errorf("unknown setting %q", key)
+	}
+	if secretEnv(s.Env) {
+		return "", false, fmt.Errorf("%s is a credential: set it with `export %s=…` — borg never writes a key to disk", key, s.Env)
 	}
 	norm, err = s.Normalize(value)
 	if err != nil {

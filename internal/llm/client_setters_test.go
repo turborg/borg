@@ -24,7 +24,8 @@ func TestClientSettersAndUserInfoGuard(t *testing.T) {
 	c2 := New(&config.Config{}, "tok")
 	require.NotPanics(t, c2.CloseIdleConnections)
 
-	// UserInfo requires apiBase
-	_, err := c.UserInfo(context.Background())
+	// On the hosted provider, UserInfo still requires an apiBase.
+	hosted := &Client{caps: CapabilitiesFor(KindXShellz)}
+	_, err := hosted.UserInfo(context.Background())
 	require.Error(t, err)
 }

@@ -9,20 +9,37 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/turborg/borg/internal/config"
 )
 
-// EnvAccessToken injects a bearer token directly, bypassing the OAuth flow and
-// the credentials file. It's meant for headless surfaces — CI and the eval bot —
+// EnvAPIKey injects a bearer token directly, bypassing the OAuth flow and the
+// credentials file. It's meant for headless surfaces — CI and the eval bot —
 // where a long-lived Passport personal access token is the right credential
 // instead of a rotating refresh token. When set it wins over any stored login.
-const EnvAccessToken = "BORG_ACCESS_TOKEN"
+//
+// It is the canonical name for "the bearer to send to the active provider",
+// shared with the bring-your-own providers (where the same variable carries an
+// OpenAI/OpenRouter key instead) — hence the generic name.
+const EnvAPIKey = config.EnvAPIKey
 
-// credentialsFromEnv builds Credentials from EnvAccessToken when it is set, else
-// returns nil. The token is treated as a non-expiring bearer: no expiry (so the
-// silent-refresh path never tries to refresh it — a PAT has no refresh token to
-// exchange) and no recorded environment (the caller sets BORG_API_BASE_URL).
+// EnvAccessToken is the ORIGINAL name for the same thing and remains a fully
+// supported ALIAS of EnvAPIKey — it is not a legacy hack to clean up: CI
+// (.github/workflows/nightly-eval.yml) feeds the eval bot's PAT through it and
+// infra provisions it, so removing it would break those. EnvAPIKey wins if both
+// are set.
+const EnvAccessToken = config.EnvAccessToken
+
+// credentialsFromEnv builds Credentials from EnvAPIKey (or its EnvAccessToken
+// alias) when either is set, else returns nil. The token is treated as a
+// non-expiring bearer: no expiry (so the silent-refresh path never tries to
+// refresh it — a PAT has no refresh token to exchange) and no recorded
+// environment (the caller sets BORG_API_BASE_URL).
 func credentialsFromEnv() *Credentials {
-	tok := strings.TrimSpace(os.Getenv(EnvAccessToken))
+	tok := strings.TrimSpace(os.Getenv(EnvAPIKey))
+	if tok == "" {
+		tok = strings.TrimSpace(os.Getenv(EnvAccessToken))
+	}
 	if tok == "" {
 		return nil
 	}

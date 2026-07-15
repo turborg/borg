@@ -1,4 +1,8 @@
-// Package llm talks to the metered, OpenAI-compatible xShellz proxy.
+// Package llm talks to an OpenAI-compatible chat-completions backend: the
+// metered xShellz proxy by default, or any endpoint the user brings (Ollama, LM
+// Studio, llama.cpp, OpenAI, OpenRouter). One transport serves all of them — the
+// proxy speaks the same API — and the differences are described by Capabilities
+// rather than by separate clients. See provider.go.
 package llm
 
 import (
@@ -21,17 +25,21 @@ import (
 	"github.com/turborg/borg/internal/version"
 )
 
-// Client calls the metered proxy at cfg.LLMProxyURL. The proxy authenticates the
-// access token, maps the public model codename to the real provider, meters
-// usage, and streams an OpenAI-compatible response back.
+// Client calls an OpenAI-compatible backend at cfg.LLMProxyURL. On the default
+// xShellz provider that's the metered proxy, which authenticates the access
+// token, maps the public model codename to the real provider, meters usage, and
+// streams the response back. On a bring-your-own provider it's the user's own
+// endpoint and borg sends a plain, standard request — caps says which.
 type Client struct {
 	baseURL string
-	apiBase string // {API} root, for non-LLM calls like /v1/users/me
+	apiBase string // {API} root, for non-LLM calls like /v1/users/me ("" off-platform)
 	token   string
 	model   string
 	effort  string // explicit reasoning_effort; "" lets the proxy map the think toggle
 	http    *http.Client
 	debug   func(string) // verbose diagnostics sink (nil = off)
+	caps    Capabilities // what this backend supports beyond the standard API
+	name    string       // the provider kind (config.Provider*)
 }
 
 // timeToFirstByte caps how long we wait for the response headers — i.e. a proxy
@@ -44,13 +52,29 @@ const timeToFirstByte = 120 * time.Second
 // body read and would cut a healthy long reply (e.g. generating a full file).
 const idleTimeout = 120 * time.Second
 
-// New builds a Client for the configured proxy and access token.
+// New builds a Client for the configured provider endpoint and bearer. The bearer
+// is the xShellz access token on the default provider, or the user's own API key
+// (cfg.APIKey) on a bring-your-own backend — an empty one is fine and means no
+// Authorization header is sent at all, which is the normal case for a local daemon.
 func New(cfg *config.Config, accessToken string) *Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = timeToFirstByte
+	name := cfg.Provider
+	if name == "" {
+		name = config.ProviderXShellz // a zero-value Config (tests, embedders) is the hosted default
+	}
+	caps := CapabilitiesFor(name)
+	// Off-platform there is no accounts-api at all, so drop the base outright
+	// rather than leaving a URL around that a stray call could reach for.
+	apiBase := ""
+	if caps.AccountEndpoints {
+		apiBase = strings.TrimRight(cfg.APIBaseURL, "/")
+	}
 	return &Client{
+		caps:    caps,
+		name:    name,
 		baseURL: strings.TrimRight(cfg.LLMProxyURL, "/"),
-		apiBase: strings.TrimRight(cfg.APIBaseURL, "/"),
+		apiBase: apiBase,
 		token:   accessToken,
 		model:   cfg.Model,
 		// No http.Client.Timeout: it spans the entire body read, which for an
@@ -102,7 +126,9 @@ type ModelInfo struct {
 }
 
 // Models fetches the model catalog: labels, versions, and per-plan availability
-// for the authenticated user.
+// for the authenticated user. Every OpenAI-compatible backend serves /models, so
+// this works on all of them — but off-platform the entries are bare (`{"id":…}`,
+// no label, no tier, no window), which is not an error: see normalizeBareModels.
 func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 	var body struct {
 		Data []ModelInfo `json:"data"`
@@ -110,7 +136,33 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 	if err := c.getJSON(ctx, c.baseURL+"/models", &body); err != nil {
 		return nil, err
 	}
+	if !c.caps.AccountEndpoints {
+		return normalizeBareModels(body.Data), nil
+	}
 	return body.Data, nil
+}
+
+// normalizeBareModels makes a plain OpenAI-compatible catalog usable by a UI
+// built for the xShellz one. Such a server answers /models with little more than
+// an id per entry, so: the id doubles as the label, and every model is marked
+// available because there is no plan gating off-platform — leaving Available
+// false (the zero value) would paint the user's own local models as locked.
+// MaxInputTokens stays 0, which correctly leaves the window to BORG_CONTEXT and
+// the agent's conservative fallback rather than inventing one.
+func normalizeBareModels(in []ModelInfo) []ModelInfo {
+	out := make([]ModelInfo, 0, len(in))
+	for _, m := range in {
+		if m.ID == "" {
+			continue // not a usable entry
+		}
+		if m.Label == "" {
+			m.Label = m.ID
+		}
+		m.MinTier = ""
+		m.Available = true
+		out = append(out, m)
+	}
+	return out
 }
 
 // UserInfo is the caller's identity + plan from /v1/users/me. Name/Email are
@@ -121,8 +173,14 @@ type UserInfo struct {
 	PlanCode string `json:"plan_code"`
 }
 
-// UserInfo fetches the caller's identity and plan from /v1/users/me.
+// UserInfo fetches the caller's identity and plan from /v1/users/me. Off-platform
+// there is no account and no such route, so it returns an EMPTY UserInfo and makes
+// no request — a bring-your-own backend must never be probed for an xShellz route
+// it would only 404 on.
 func (c *Client) UserInfo(ctx context.Context) (*UserInfo, error) {
+	if !c.caps.AccountEndpoints {
+		return &UserInfo{}, nil
+	}
 	if c.apiBase == "" {
 		return nil, fmt.Errorf("no API base URL configured")
 	}
@@ -137,8 +195,12 @@ func (c *Client) UserInfo(ctx context.Context) (*UserInfo, error) {
 }
 
 // Tier returns the caller's plan code (free, starter, pro, max) from
-// /v1/users/me; an absent plan reports as "free".
+// /v1/users/me; an absent plan reports as "free". Off-platform there are no plans
+// to gate on, so it returns "" (no request) and callers render no plan line.
 func (c *Client) Tier(ctx context.Context) (string, error) {
+	if !c.caps.AccountEndpoints {
+		return "", nil
+	}
 	u, err := c.UserInfo(ctx)
 	if err != nil {
 		return "", err
@@ -170,8 +232,12 @@ func (u *AccountUsage) WindowHoursOrDefault() int {
 }
 
 // Usage fetches the account's plan and rolling-24h credit budget from the
-// metered proxy (GET /usage).
+// metered proxy (GET /usage). There is nothing to meter on a backend you pay for
+// yourself, so off-platform it returns ErrNoMetering without making a request.
 func (c *Client) Usage(ctx context.Context) (*AccountUsage, error) {
+	if !c.caps.AccountEndpoints {
+		return nil, ErrNoMetering
+	}
 	var u AccountUsage
 	if err := c.getJSON(ctx, c.baseURL+"/usage", &u); err != nil {
 		return nil, err
@@ -186,6 +252,11 @@ func (c *Client) Usage(ctx context.Context) (*AccountUsage, error) {
 // called after explicit user consent. A 404 (endpoint not deployed yet) surfaces as
 // a clear error the UI can show, rather than failing silently.
 func (c *Client) SubmitFeedback(ctx context.Context, kind, report string, meta map[string]string) error {
+	// Nowhere to report to off-platform (and the report would be about a harness
+	// running against someone else's backend anyway) — say so without sending.
+	if !c.caps.AccountEndpoints {
+		return ErrNoMetering
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	payload, err := json.Marshal(map[string]any{"kind": kind, "report": report, "meta": meta})
@@ -259,7 +330,7 @@ func (c *Client) getJSON(ctx context.Context, url string, out any) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	c.authorize(req)
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -267,9 +338,18 @@ func (c *Client) getJSON(ctx context.Context, url string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return errorFromResponse(resp)
+		return c.errorFromResponse(resp)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// authorize sets the bearer, if there is one. A local backend usually wants no
+// Authorization header at all — sending a bare "Bearer " is worse than sending
+// nothing, since some servers parse it and reject the empty credential.
+func (c *Client) authorize(req *http.Request) {
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 }
 
 // Message is one conversation turn (OpenAI shape).
@@ -322,15 +402,42 @@ type ToolFunction struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
+// chatRequest is the OpenAI-compatible request body. Model/Messages/Stream/Tools
+// are standard and go to every backend; the rest are extensions that only some
+// backends understand, so each is gated on a Capability and omitted otherwise
+// (see applyCaps). Every one of them is `omitempty`, so a gated-off field
+// disappears from the JSON entirely rather than being sent as a zero value.
 type chatRequest struct {
 	Model           string    `json:"model"`
 	Messages        []Message `json:"messages"`
 	Stream          bool      `json:"stream"`
-	Think           bool      `json:"think,omitempty"`
-	ReasoningEffort string    `json:"reasoning_effort,omitempty"` // explicit level; overrides Think on the proxy
+	Think           bool      `json:"think,omitempty"`            // xShellz-proxy extension, NOT OpenAI (caps.ReasoningEffort)
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"` // explicit level; overrides Think on the proxy (caps.ReasoningEffort)
 	Tools           []Tool    `json:"tools,omitempty"`
-	ToolChoice      string    `json:"tool_choice,omitempty"`      // usually empty => proxy/model default ("auto")
-	PromptCacheKey  string    `json:"prompt_cache_key,omitempty"` // prefix-cache routing hint, forwarded by the proxy
+	ToolChoice      string    `json:"tool_choice,omitempty"`      // usually empty => proxy/model default ("auto") (caps.ForcedToolChoice)
+	PromptCacheKey  string    `json:"prompt_cache_key,omitempty"` // prefix-cache routing hint, forwarded by the proxy (caps.PromptCacheKey)
+}
+
+// applyCaps strips every request field the active backend doesn't understand.
+//
+// It runs AFTER the ChatOptions, deliberately: an option is a per-turn override
+// (WithEffort on an escalation, ForceToolChoice on a leak-retry) and must not be
+// able to smuggle an unsupported field past the gate — so this is the single
+// choke point where the wire format is decided, rather than a check at each call
+// site that someone will forget. The stakes are asymmetric: the xShellz proxy
+// ignores what it doesn't want, but a strict OpenAI-compatible server answers an
+// unknown field with a 400 and the turn dies. Standard fields are never touched.
+func (c *Client) applyCaps(r *chatRequest) {
+	if !c.caps.ReasoningEffort {
+		r.Think = false
+		r.ReasoningEffort = ""
+	}
+	if !c.caps.ForcedToolChoice {
+		r.ToolChoice = ""
+	}
+	if !c.caps.PromptCacheKey {
+		r.PromptCacheKey = ""
+	}
 }
 
 // promptCacheKey derives a STABLE prefix-cache routing key from the conversation's
@@ -418,13 +525,14 @@ func (c *Client) postWithRetry(ctx context.Context, url string, body []byte) (*h
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+c.token)
+		c.authorize(req)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "text/event-stream")
 		// Let the metered proxy enforce a minimum supported version (426 ⇒ the
 		// agent loop surfaces an "update" message). Dev builds send nothing so a
-		// version gate never blocks local development.
-		if v := version.Version; v != "" && v != "dev" {
+		// version gate never blocks local development, and only the proxy gets it —
+		// nobody else's server has a use for borg's version.
+		if v := version.Version; v != "" && v != "dev" && c.caps.AccountEndpoints {
 			req.Header.Set("X-Turborg-Version", v)
 		}
 
@@ -440,12 +548,12 @@ func (c *Client) postWithRetry(ctx context.Context, url string, body []byte) (*h
 			return resp, nil
 		}
 		if !retryableStatus(resp.StatusCode) || attempt == maxAttempts-1 {
-			err := errorFromResponse(resp)
+			err := c.errorFromResponse(resp)
 			_ = resp.Body.Close()
 			return nil, err
 		}
 		retryAfter = parseRetryAfter(resp.Header)
-		lastErr = errorFromResponse(resp)
+		lastErr = c.errorFromResponse(resp)
 		_ = resp.Body.Close()
 	}
 	return nil, lastErr
@@ -513,6 +621,28 @@ func (c *Client) Chat(ctx context.Context, msgs []Message, tools []Tool, think b
 	for _, opt := range opts {
 		opt(&req)
 	}
+	c.applyCaps(&req) // after the options: they must not be able to bypass the gate
+	msg, err := c.chat(ctx, &req, onDelta)
+	// A backend that advertises tool_choice can still reject the value borg picked
+	// ("required" isn't universally implemented, and the gateways disagree about
+	// which models accept it). tool_choice is only ever an OPTIMIZATION — guided
+	// decoding on a leak-retry — so drop it and try once more rather than fail the
+	// turn over it. Bounded to one extra attempt; only on a 400, which is the
+	// "I don't accept that" answer (a 5xx is transient and already retried below).
+	if err != nil && req.ToolChoice != "" && statusOf(err) == http.StatusBadRequest {
+		if c.debug != nil {
+			c.debug(fmt.Sprintf("↻ %s rejected tool_choice=%q (400: %v) — retrying once without it", c.name, req.ToolChoice, err))
+		}
+		req.ToolChoice = ""
+		return c.chat(ctx, &req, onDelta)
+	}
+	return msg, err
+}
+
+// chat marshals one prepared request and streams it, retrying transient failures.
+// Split from Chat so the tool_choice fallback can re-issue a modified request
+// through exactly the same path.
+func (c *Client) chat(ctx context.Context, req *chatRequest, onDelta func(string)) (*Message, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -520,8 +650,8 @@ func (c *Client) Chat(ctx context.Context, msgs []Message, tools []Tool, think b
 	if c.debug != nil {
 		// Request SUMMARY only (no headers → no bearer token leaked; the body holds
 		// the caller's own messages/tools).
-		c.debug(fmt.Sprintf("→ POST %s/chat/completions  model=%s effort=%q think=%v tool_choice=%q  %d msgs  %d tools  %d bytes",
-			c.baseURL, c.model, req.ReasoningEffort, think, req.ToolChoice, len(msgs), len(tools), len(body)))
+		c.debug(fmt.Sprintf("→ POST %s/chat/completions  provider=%s model=%s effort=%q think=%v tool_choice=%q  %d msgs  %d tools  %d bytes",
+			c.baseURL, c.name, c.model, req.ReasoningEffort, req.Think, req.ToolChoice, len(req.Messages), len(req.Tools), len(body)))
 	}
 
 	// Re-issue the identical request on a TRANSIENT mid-stream failure — a provider
@@ -711,14 +841,33 @@ type streamChunk struct {
 	} `json:"error"`
 }
 
+// statusError carries the HTTP status alongside a request error so callers can
+// branch on it (the tool_choice 400 fallback in Chat) without string-matching a
+// message meant for humans. Error() is unchanged, so what users see is identical.
+type statusError struct {
+	status int
+	err    error
+}
+
+func (e *statusError) Error() string { return e.err.Error() }
+func (e *statusError) Unwrap() error { return e.err }
+
+// statusOf reports the HTTP status an error carries, or 0 if it isn't one.
+func statusOf(err error) int {
+	var e *statusError
+	if errors.As(err, &e) {
+		return e.status
+	}
+	return 0
+}
+
 // errorFromResponse turns a non-200 (e.g. budget/tier gate) into a clear error.
-func errorFromResponse(resp *http.Response) error {
+func (c *Client) errorFromResponse(resp *http.Response) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-	// A 401 means the access token was rejected and silent refresh couldn't
-	// recover it (most often the refresh token has expired) — the only fix is to
-	// log in again, so say so plainly rather than leaking a bare status line.
-	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("session expired — run `borg auth login` to re-authenticate (in the REPL: /login)")
+	status := resp.StatusCode
+	fail := func(err error) error { return &statusError{status: status, err: err} }
+	if status == http.StatusUnauthorized {
+		return fail(errors.New(c.unauthorizedHint()))
 	}
 	var e struct {
 		Error struct {
@@ -727,7 +876,22 @@ func errorFromResponse(resp *http.Response) error {
 		} `json:"error"`
 	}
 	if json.Unmarshal(raw, &e) == nil && e.Error.Message != "" {
-		return fmt.Errorf("llm %d (%s): %s", resp.StatusCode, e.Error.Type, e.Error.Message)
+		return fail(fmt.Errorf("llm %d (%s): %s", status, e.Error.Type, e.Error.Message))
 	}
-	return fmt.Errorf("llm request failed: %s", resp.Status)
+	return fail(fmt.Errorf("llm request failed: %s", resp.Status))
+}
+
+// unauthorizedHint explains a 401 in terms of the credential the ACTIVE provider
+// actually uses. On xShellz a 401 means the access token was rejected and silent
+// refresh couldn't recover it (usually an expired refresh token), so the fix is to
+// log in again. Off-platform there is no login — the fix is the API key — and
+// telling a user of their own local model to "run borg auth login" would be a lie.
+func (c *Client) unauthorizedHint() string {
+	if c.caps.RequiresAuth {
+		return "session expired — run `borg auth login` to re-authenticate (in the REPL: /login)"
+	}
+	if c.token == "" {
+		return "the " + c.name + " endpoint requires an API key — set " + config.EnvAPIKey
+	}
+	return "the " + c.name + " endpoint rejected the API key — check " + config.EnvAPIKey
 }

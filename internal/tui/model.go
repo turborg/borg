@@ -689,7 +689,11 @@ func (m model) infoLine() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(dim.Render("plan: ") + brand.Render(titleCase(m.tier)))
+	// No tier off-platform (there are no plans to be on), so the plan chunk is
+	// dropped rather than rendered as an empty "plan:".
+	if m.tier != "" {
+		b.WriteString(dim.Render("plan: ") + brand.Render(titleCase(m.tier)))
+	}
 	for _, mi := range m.models {
 		mark := tool.Render("✓")
 		if !m.modelAvailable(mi) {
@@ -2632,6 +2636,13 @@ func planCap(tier string) string {
 // across all models). If the live endpoint isn't available (older accounts-api),
 // it falls back to the plan's static caps.
 func (m model) renderUsage(msg usageMsg) string {
+	// Nothing is metered on a backend the user pays for themselves. Say that
+	// plainly: the static-plan fallback below would otherwise invent an xShellz
+	// plan and a credit cap that have nothing to do with this session.
+	if errors.Is(msg.err, llm.ErrNoMetering) {
+		return dim.Render("no usage to report — this session runs on your own "+m.agent.Provider()+" backend ("+m.agent.Endpoint()+").\n") +
+			dim.Render("Plans and credits are xShellz-only; whatever this backend costs is between you and it.")
+	}
 	if msg.err != nil || msg.usage == nil {
 		return m.usageFallback()
 	}
@@ -2665,6 +2676,17 @@ func (m model) renderStatus(msg statusMsg) string {
 
 	// Login + environment.
 	b.WriteString(brand.Render(version.Command()+" ") + dim.Render(version.Version) + "\n")
+	// On a bring-your-own backend there is no account, so the whole login/plan/
+	// usage block is meaningless — and worse than meaningless: it would report
+	// "not logged in" as a problem to fix and invent a Free plan with a credit cap.
+	// Report the backend instead, which is what actually governs this session.
+	if m.agent.BringYourOwn() {
+		b.WriteString(dim.Render("provider: ") + brand.Render(m.agent.Provider()) + "\n")
+		b.WriteString(dim.Render("endpoint: ") + m.agent.Endpoint() + "\n")
+		b.WriteString(dim.Render("usage:    ") + dim.Render("not metered by borg — you own this backend") + "\n")
+		b.WriteString(m.sessionSettingsLines())
+		return b.String()
+	}
 	if auth.LoggedIn {
 		who := "logged in"
 		if msg.user != nil {
@@ -2704,7 +2726,14 @@ func (m model) renderStatus(msg statusMsg) string {
 		b.WriteString(dim.Render("usage:   ") + dim.Render("(live usage unavailable)") + "\n")
 	}
 
-	// Current session settings.
+	b.WriteString(m.sessionSettingsLines())
+	return b.String()
+}
+
+// sessionSettingsLines renders the current session's model/think/effort + cwd —
+// the tail of /status, shared by the hosted and bring-your-own panels so the two
+// can't drift.
+func (m model) sessionSettingsLines() string {
 	think := "off"
 	if m.agent.Think() {
 		think = "on"
@@ -2713,10 +2742,16 @@ func (m model) renderStatus(msg statusMsg) string {
 	if effort == "" {
 		effort = "default (follows think)"
 	}
-	b.WriteString(dim.Render("model:   ") + m.agent.Model() +
-		dim.Render("   think ") + think + dim.Render("   effort ") + effort + "\n")
-	b.WriteString(dim.Render("cwd:     ") + m.cwd)
-	return b.String()
+	// Reasoning is an xShellz-proxy feature: the fields aren't portable, so borg
+	// doesn't send them elsewhere. Don't report a think/effort that isn't in force.
+	if m.agent.BringYourOwn() {
+		return dim.Render("model:    ") + m.agent.Model() +
+			dim.Render("   think/effort n/a (xShellz-only)") + "\n" +
+			dim.Render("cwd:      ") + m.cwd
+	}
+	return dim.Render("model:   ") + m.agent.Model() +
+		dim.Render("   think ") + think + dim.Render("   effort ") + effort + "\n" +
+		dim.Render("cwd:     ") + m.cwd
 }
 
 // usageFallback shows the plan + static caps when live usage can't be fetched.

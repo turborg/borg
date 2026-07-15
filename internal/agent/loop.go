@@ -59,6 +59,21 @@ const (
 	// toolCallCorrection nudges a model that leaked a text tool call to re-issue it
 	// through the real tool interface.
 	toolCallCorrection = "Your previous reply wrote a tool call as plain text, so nothing ran. Do NOT print tool calls as text or in <tool_call> blocks. Re-issue the intended tool call now through the function/tool-calling interface so it executes."
+	// maxEmptyReplies bounds how many replies that carry NOTHING — no text and no
+	// tool call — a task tolerates before it stops. One is a hiccup worth
+	// re-prompting; the next means the backend can't drive the loop at all, and
+	// since each such turn re-sends the whole conversation for nothing, retrying
+	// further just burns the budget on silence. Without this the turn ended
+	// silently (an empty reply is neither an error nor content), which reads to the
+	// user as borg idling at the prompt for no stated reason.
+	maxEmptyReplies = 2
+	emptyReplyNudge = "Your last reply was empty — no text and no tool call, so nothing happened. Make progress now: either call a tool, or answer in plain text and call the finish tool."
+	// emptyReplyMsg names the likeliest cause, because it's a configuration problem
+	// the user has to fix (borg cannot recover from it by trying harder) and the
+	// symptom on its own is baffling. It stays language- and model-agnostic: it
+	// describes the CAPABILITY that's missing, never a specific model or vendor.
+	emptyReplyMsg = "stopped — the model returned an empty reply (no text, no tool call) %d times in a row.\n\nThe usual cause is that this model can't make structured tool calls: borg's loop is tools-first, so a model without reliable tool-calling has nothing to answer with. Try a model that advertises tool/function calling, or check that your endpoint passes the `tools` field through to the model"
+
 	// maxRepetitionRetries bounds how many times one turn is re-issued under forced
 	// tool-calling after the stream guard cut a degenerate prose loop short — a
 	// small model deliberating in circles ("Wait… Actually… I'm ready…") instead of
@@ -464,8 +479,9 @@ func New(cfg *config.Config, creds *auth.Credentials) *Agent {
 }
 
 // NewWithLLM builds an Agent backed by a caller-supplied model client instead of
-// the metered proxy. This is the constructor the eval harness uses to drive the
-// loop with a scripted or replayed model. Production code uses New.
+// the credentials-derived one. The eval harness uses it to drive the loop with a
+// scripted or replayed model; the CLI uses it for a bring-your-own provider,
+// where the client is built from a config-supplied key rather than a login.
 func NewWithLLM(cfg *config.Config, client LLM) *Agent {
 	return &Agent{
 		cfg:           cfg,
@@ -670,6 +686,22 @@ func (a *Agent) SetModel(model string) {
 
 // Model returns the current model codename.
 func (a *Agent) Model() string { return a.cfg.Model }
+
+// Provider returns the active backend kind (e.g. "xshellz", "ollama").
+func (a *Agent) Provider() string {
+	if a.cfg.Provider == "" {
+		return config.ProviderXShellz
+	}
+	return a.cfg.Provider
+}
+
+// BringYourOwn reports whether this session runs against a user-supplied backend
+// rather than the hosted proxy. The UI checks it before showing anything that
+// only exists on the platform (plans, credits, login state).
+func (a *Agent) BringYourOwn() bool { return a.cfg.BringYourOwn() }
+
+// Endpoint returns the base URL model calls go to, for diagnostics/status.
+func (a *Agent) Endpoint() string { return a.cfg.LLMProxyURL }
 
 // Models returns the model catalog (labels, versions, per-plan availability).
 func (a *Agent) Models(ctx context.Context) ([]llm.ModelInfo, error) { return a.llm.Models(ctx) }
@@ -989,6 +1021,7 @@ func (a *Agent) Ask(ctx context.Context, task string) error {
 	stepsTaken := 0
 
 	leakRetries := 0
+	emptyReplies := 0               // consecutive replies carrying no text AND no tool call
 	repetitionRetries := 0          // turns re-issued after the stream guard cut a prose loop short
 	forceStructured := false        // one-shot: escalate the NEXT turn to required tool-calling after a detected leak
 	var recentSigs []string         // sliding window of recent step signatures, for cycle detection
@@ -1194,6 +1227,21 @@ func (a *Agent) Ask(ctx context.Context, task string) error {
 				a.messages = append(a.messages, llm.Message{Role: "user", Content: toolCallCorrection})
 				continue
 			}
+			// A reply with no tool call AND no text said nothing at all. Nudge once —
+			// it may be a hiccup — then stop with a cause, rather than ending the turn
+			// silently or spinning. This is the terminal case for a backend that
+			// can't tool-call: it has no way to act and nothing to say.
+			if strings.TrimSpace(reply.Content) == "" {
+				emptyReplies++
+				if emptyReplies >= maxEmptyReplies {
+					struggleReasons = append(struggleReasons, "the model returned empty replies — it may not support tool-calling")
+					terminal = true
+					return fmt.Errorf(emptyReplyMsg, emptyReplies)
+				}
+				forceStructured = true // guided decoding, where the backend supports it
+				a.messages = append(a.messages, llm.Message{Role: "user", Content: emptyReplyNudge})
+				continue
+			}
 			if forceArtifact() {
 				continue // tried to finish without ever writing the required file
 			}
@@ -1204,6 +1252,7 @@ func (a *Agent) Ask(ctx context.Context, task string) error {
 			return nil
 		}
 		leakRetries = 0
+		emptyReplies = 0
 		repetitionRetries = 0
 		results := a.runToolCalls(ctx, reply.ToolCalls)
 		for i, tc := range reply.ToolCalls {
