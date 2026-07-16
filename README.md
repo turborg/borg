@@ -12,6 +12,10 @@
 
 ---
 
+<p align="center">
+  <img src=".github/demo.gif" alt="borg building, verifying, and running a FastAPI app from a single prompt" width="900">
+</p>
+
 borg reads and edits your files, runs your commands, and works a task until it's done and verified —
 the way you'd expect a terminal coding agent to.
 
