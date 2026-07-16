@@ -111,3 +111,18 @@ func TestLocalBannerShowsNoAccountUI(t *testing.T) {
 	require.NotContains(t, out, "credits")
 	require.NotContains(t, out, "login")
 }
+
+// When auto-approve is on, the footer must show the amber chip: with the prompt
+// gone, that chip is the only standing signal that mutating tools run unattended.
+func TestFooterFlagsAutoApprove(t *testing.T) {
+	m := newLocalTestModel(t)
+	m.width = 120
+	m.gitBranch = "" // isolate the chip from a branch name that may contain the word
+
+	m.agent.SetAutoApprove(false)
+	require.NotContains(t, ansiRE.ReplaceAllString(m.footerView(""), ""), "auto-approve")
+
+	m.agent.SetAutoApprove(true)
+	require.Contains(t, ansiRE.ReplaceAllString(m.footerView(""), ""), "auto-approve",
+		"an auto-approving session must be visibly flagged")
+}

@@ -201,10 +201,27 @@ file, so a one-off `BORG_PROVIDER=ollama turborg …` works without changing any
 | `context` | `BORG_CONTEXT` | auto | context window in tokens (see above) |
 | `api_key_env` | `BORG_API_KEY_ENV` | — | **name** of the env var holding your key |
 | — | `BORG_API_KEY` | — | the key itself — **env only, never a setting** |
+| `auto_approve` | `BORG_AUTO_APPROVE` | `false` | run edits and `bash` without the y/n/a prompt |
 
 `BORG_API_KEY` has no `settings.json` entry and never will: borg will not write a credential to
 disk, and refuses to read one from there even if you put it in by hand. `BORG_ACCESS_TOKEN` is an
 alias of it, kept for CI.
+
+### Skip the permission prompts
+
+By default borg asks before it writes a file or runs a shell command (`[y]es / [n]o / [a]lways`).
+To stop being asked in a workspace you trust:
+
+```bash
+turborg settings set auto_approve on     # persists; or one-off: BORG_AUTO_APPROVE=1 turborg …
+```
+
+This is the standing form of pressing `a` on every prompt. It does **not** widen the directory
+trust boundary — edits are still refused outside the directory you granted, whatever the model asks.
+What it genuinely removes is the gate on `bash`, which isn't path-scoped, so an auto-approving
+session can run **any** command the agent decides to. That's the trade: leave it off for untrusted
+code, turn it on when you're driving borg through work you'd have approved anyway. While it's on, the
+REPL footer shows an amber **`auto-approve`** flag so the session's state is never a surprise.
 
 ## Development
 

@@ -130,6 +130,18 @@ type Config struct {
 	// cost is unproven — measure it before ever defaulting this on.
 	EscalateModel string `env:"BORG_ESCALATE_MODEL"`
 
+	// AutoApprove skips the per-tool permission prompt for a session: the agent
+	// runs mutating tools (write_file, edit_file, edit_lines, bash) without asking
+	// y/n/a each time. It is the standing form of pressing "a" on every prompt.
+	//
+	// It does NOT widen the trust boundary — edits are still refused outside the
+	// trusted root (that check lives in the tools layer, independent of the
+	// prompt). What it genuinely removes is the gate on `bash`, which is not
+	// path-scoped, so an auto-approved session can run any command the agent
+	// decides to. Off by default for that reason; it's a deliberate "I trust this
+	// workspace, stop asking" switch, not something to leave on globally.
+	AutoApprove bool `env:"BORG_AUTO_APPROVE"`
+
 	// ForceDevice skips the browser/PKCE flow and uses the device flow.
 	ForceDevice bool `env:"BORG_FORCE_DEVICE"`
 
