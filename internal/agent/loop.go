@@ -1747,6 +1747,8 @@ func (a *Agent) runProjectVerify(ctx context.Context, cmd string) (string, bool)
 		switch a.ui.Permit("verify: " + cmd) {
 		case DenyOnce:
 			return "", false
+		case AllowSession:
+			a.autoApprove = true // trust the whole session — no more prompts
 		case AllowAlways:
 			a.always[verifyCmdPermitKey] = true
 		case AllowOnce:
@@ -1929,6 +1931,8 @@ func (a *Agent) runTool(ctx context.Context, tc llm.ToolCall) string {
 		case DenyOnce:
 			a.ui.ToolResult(t.Name(), false, "permission denied")
 			return "error: the user denied permission to run this tool"
+		case AllowSession:
+			a.autoApprove = true // trust the whole session — no more prompts
 		case AllowAlways:
 			a.always[t.Name()] = true
 		case AllowOnce:

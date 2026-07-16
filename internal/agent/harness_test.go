@@ -1818,3 +1818,57 @@ func TestAutoApproveStillHonorsTrustBoundary(t *testing.T) {
 	require.NoFileExists(t, outside, "the trust boundary must hold even with auto-approve on")
 	require.Contains(t, lastToolResult(a), "outside the trusted directory")
 }
+
+// "trust session" (the [t] option) approves the CURRENT tool and turns off the
+// prompt for every mutating tool after it — unlike [a]lways, which only covers
+// the one tool. So a write_file that answers AllowSession must let a LATER,
+// DIFFERENT tool (bash) run without a second prompt.
+func TestAllowSessionTrustsEverythingAfter(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "f.txt")
+	// The first prompt answers "trust session"; if a second prompt ever fires the
+	// test fails, because this answer would (wrongly) trust-session again but we
+	// assert exactly one permit happened.
+	ui := &harnessUI{answer: func(string) Decision { return AllowSession }}
+	s := &scriptedLLM{steps: []llm.Message{
+		callTool("1", "write_file", `{"path":"`+out+`","content":"hi"}`),
+		callTool("2", "bash", `{"command":"echo second-tool-ran"}`),
+		say("done"),
+	}}
+	a := newHarness(t, ui, s)
+	a.SetTrustRoot(dir)
+
+	require.NoError(t, a.Ask(context.Background(), "write then run"))
+	require.Equal(t, []string{"write_file"}, ui.permits,
+		"only the first tool prompts; trust-session covers the rest")
+	require.True(t, a.AutoApprove(), "trust-session leaves the session in auto-approve")
+	b, err := os.ReadFile(out)
+	require.NoError(t, err)
+	require.Equal(t, "hi", string(b))
+}
+
+// "trust session" must NOT widen the trust boundary — same floor as auto-approve.
+func TestAllowSessionStillHonorsTrustBoundary(t *testing.T) {
+	trusted := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "escape.txt")
+	ui := &harnessUI{answer: func(string) Decision { return AllowSession }}
+	s := &scriptedLLM{steps: []llm.Message{
+		callTool("1", "write_file", `{"path":"`+outside+`","content":"x"}`),
+		say("blocked"),
+	}}
+	a := newHarness(t, ui, s)
+	a.SetTrustRoot(trusted)
+
+	require.NoError(t, a.Ask(context.Background(), "escape"))
+	require.NoFileExists(t, outside)
+	require.Contains(t, lastToolResult(a), "outside the trusted directory")
+}
+
+func TestDecideParsesTrust(t *testing.T) {
+	require.Equal(t, AllowSession, decide("t"))
+	require.Equal(t, AllowSession, decide("  TRUST \n"))
+	require.Equal(t, AllowAlways, decide("a"))
+	require.Equal(t, AllowOnce, decide("y"))
+	require.Equal(t, DenyOnce, decide("n"))
+	require.Equal(t, DenyOnce, decide(""))
+}

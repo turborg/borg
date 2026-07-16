@@ -1486,6 +1486,8 @@ func (m model) onPermitKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch strings.ToLower(msg.String()) {
 	case "a":
 		d = agent.AllowAlways
+	case "t":
+		d = agent.AllowSession
 	case "y":
 		d = agent.AllowOnce
 	}
@@ -2320,7 +2322,7 @@ func (m model) View() tea.View {
 		b.WriteString(m.trustView())
 	case modePermit:
 		b.WriteString(dim.Render(fmt.Sprintf("  allow %s? ", m.permitName)) +
-			"[y]es / [n]o / [a]lways")
+			"[y]es / [n]o / [a]lways / [t]rust session")
 	case modeAskUser:
 		b.WriteString(m.askView())
 	case modeConfirmPurge:
