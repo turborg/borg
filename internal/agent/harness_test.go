@@ -1750,3 +1750,125 @@ func TestTrustRootConfinesEdits(t *testing.T) {
 	require.NoFileExists(t, outside)
 	require.Contains(t, lastToolResult(a), "outside the trusted")
 }
+
+// AutoApprove is the standing form of pressing "a" on every prompt: a mutating
+// tool runs without the loop ever asking. The UI would DENY if consulted, so an
+// empty permits slice proves the prompt was skipped, not answered.
+func TestAutoApproveSkipsThePrompt(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "f.txt")
+	ui := &harnessUI{answer: func(string) Decision { return DenyOnce }}
+	s := &scriptedLLM{steps: []llm.Message{
+		callTool("1", "write_file", `{"path":"`+out+`","content":"hi"}`),
+		say("done"),
+	}}
+	a := newHarness(t, ui, s)
+	a.SetAutoApprove(true)
+
+	require.NoError(t, a.Ask(context.Background(), "write the file"))
+	require.Empty(t, ui.permits, "auto-approve must not prompt")
+	b, err := os.ReadFile(out)
+	require.NoError(t, err)
+	require.Equal(t, "hi", string(b))
+}
+
+// Off (the default), the same write is gated exactly as before — a regression
+// guard so the feature can't silently disable prompting for everyone.
+func TestWithoutAutoApproveStillPrompts(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "f.txt")
+	ui := &harnessUI{answer: func(string) Decision { return DenyOnce }}
+	s := &scriptedLLM{steps: []llm.Message{
+		callTool("1", "write_file", `{"path":"`+out+`","content":"nope"}`),
+		say("left it"),
+	}}
+	a := newHarness(t, ui, s)
+
+	require.NoError(t, a.Ask(context.Background(), "write it"))
+	require.Equal(t, []string{"write_file"}, ui.permits, "prompt must still fire when auto-approve is off")
+	require.NoFileExists(t, out)
+}
+
+// The config flows into the agent at construction, so `borg settings set
+// auto_approve on` (or the env var) takes effect without any extra wiring.
+func TestAutoApproveFromConfig(t *testing.T) {
+	a := NewWithLLM(&config.Config{Model: "floko", AutoApprove: true}, &scriptedLLM{})
+	require.True(t, a.AutoApprove())
+	a.ApplySetting("auto_approve", "false") // the /settings toggle path
+	require.False(t, a.AutoApprove())
+}
+
+// The safety floor: auto-approve skips the PROMPT, never the trust boundary. An
+// edit outside the trusted root is still refused — that check lives in the tools
+// layer, independent of permission — so "stop asking" can't become "write
+// anywhere".
+func TestAutoApproveStillHonorsTrustBoundary(t *testing.T) {
+	trusted := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "escape.txt")
+	ui := &harnessUI{answer: func(string) Decision { return AllowOnce }}
+	s := &scriptedLLM{steps: []llm.Message{
+		callTool("1", "write_file", `{"path":"`+outside+`","content":"x"}`),
+		say("blocked"),
+	}}
+	a := newHarness(t, ui, s)
+	a.SetTrustRoot(trusted)
+	a.SetAutoApprove(true)
+
+	require.NoError(t, a.Ask(context.Background(), "write outside"))
+	require.NoFileExists(t, outside, "the trust boundary must hold even with auto-approve on")
+	require.Contains(t, lastToolResult(a), "outside the trusted directory")
+}
+
+// "trust session" (the [t] option) approves the CURRENT tool and turns off the
+// prompt for every mutating tool after it — unlike [a]lways, which only covers
+// the one tool. So a write_file that answers AllowSession must let a LATER,
+// DIFFERENT tool (bash) run without a second prompt.
+func TestAllowSessionTrustsEverythingAfter(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "f.txt")
+	// The first prompt answers "trust session"; if a second prompt ever fires the
+	// test fails, because this answer would (wrongly) trust-session again but we
+	// assert exactly one permit happened.
+	ui := &harnessUI{answer: func(string) Decision { return AllowSession }}
+	s := &scriptedLLM{steps: []llm.Message{
+		callTool("1", "write_file", `{"path":"`+out+`","content":"hi"}`),
+		callTool("2", "bash", `{"command":"echo second-tool-ran"}`),
+		say("done"),
+	}}
+	a := newHarness(t, ui, s)
+	a.SetTrustRoot(dir)
+
+	require.NoError(t, a.Ask(context.Background(), "write then run"))
+	require.Equal(t, []string{"write_file"}, ui.permits,
+		"only the first tool prompts; trust-session covers the rest")
+	require.True(t, a.AutoApprove(), "trust-session leaves the session in auto-approve")
+	b, err := os.ReadFile(out)
+	require.NoError(t, err)
+	require.Equal(t, "hi", string(b))
+}
+
+// "trust session" must NOT widen the trust boundary — same floor as auto-approve.
+func TestAllowSessionStillHonorsTrustBoundary(t *testing.T) {
+	trusted := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "escape.txt")
+	ui := &harnessUI{answer: func(string) Decision { return AllowSession }}
+	s := &scriptedLLM{steps: []llm.Message{
+		callTool("1", "write_file", `{"path":"`+outside+`","content":"x"}`),
+		say("blocked"),
+	}}
+	a := newHarness(t, ui, s)
+	a.SetTrustRoot(trusted)
+
+	require.NoError(t, a.Ask(context.Background(), "escape"))
+	require.NoFileExists(t, outside)
+	require.Contains(t, lastToolResult(a), "outside the trusted directory")
+}
+
+func TestDecideParsesTrust(t *testing.T) {
+	require.Equal(t, AllowSession, decide("t"))
+	require.Equal(t, AllowSession, decide("  TRUST \n"))
+	require.Equal(t, AllowAlways, decide("a"))
+	require.Equal(t, AllowOnce, decide("y"))
+	require.Equal(t, DenyOnce, decide("n"))
+	require.Equal(t, DenyOnce, decide(""))
+}

@@ -102,6 +102,12 @@ var Settings = []Setting{
 		Hot:  true,
 	},
 	{
+		Key: "auto_approve", Env: "BORG_AUTO_APPROVE", Label: "Auto-approve tools",
+		Kind: KindBool, Default: "false",
+		Desc: "run edits and bash without the y/n/a prompt (edits still can't leave the trusted dir; bash becomes unbounded)",
+		Hot:  true,
+	},
+	{
 		Key: "git_attribution", Env: "BORG_GIT_ATTRIBUTION", Label: "Git attribution",
 		Kind: KindBool, Default: "true",
 		Desc: "add a Turborg Co-Authored-By trailer to commits borg makes",

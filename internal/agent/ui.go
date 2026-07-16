@@ -42,7 +42,14 @@ type Decision int
 const (
 	DenyOnce Decision = iota
 	AllowOnce
+	// AllowAlways approves THIS tool for the rest of the session (a.always[name]).
 	AllowAlways
+	// AllowSession trusts the WHOLE session: every mutating tool from here on runs
+	// without a prompt. It's the one-keypress form of turning on auto-approve
+	// mid-run, for when you've decided you trust what borg is doing in this
+	// workspace and don't want to keep answering per-tool. It never widens the
+	// directory trust boundary — edits still can't leave the trusted root.
+	AllowSession
 )
 
 // AskOption is one choice offered by the ask_user tool: a short label the user
@@ -169,7 +176,7 @@ func (u *plainUI) Debug(s string) {
 }
 
 func (u *plainUI) Permit(name string) Decision {
-	fmt.Fprintf(u.errw, "   allow %s? [y]es / [n]o / [a]lways: ", name)
+	fmt.Fprintf(u.errw, "   allow %s? [y]es / [n]o / [a]lways / [t]rust session: ", name)
 	line, err := u.in.ReadString('\n')
 	if err != nil {
 		return DenyOnce
@@ -209,6 +216,8 @@ func decide(line string) Decision {
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "a", "always":
 		return AllowAlways
+	case "t", "trust":
+		return AllowSession
 	case "y", "yes":
 		return AllowOnce
 	default:

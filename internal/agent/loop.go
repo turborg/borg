@@ -431,6 +431,7 @@ type Agent struct {
 	ui            UI
 	messages      []llm.Message
 	always        map[string]bool // tools approved for the whole session
+	autoApprove   bool            // skip the permission prompt for every mutating tool this session
 	trustRoot     string          // edits confined to this dir ("" = unrestricted)
 	effort        string          // explicit reasoning_effort ("" = follow the think toggle)
 	debug         bool            // verbose diagnostics (full tool I/O, per-step trace, reasoning, raw HTTP)
@@ -490,6 +491,7 @@ func NewWithLLM(cfg *config.Config, client LLM) *Agent {
 		ui:            newPlainUI(),
 		messages:      []llm.Message{{Role: "system", Content: composeSystemPrompt(cfg)}},
 		always:        map[string]bool{},
+		autoApprove:   cfg.AutoApprove,
 		maxSteps:      defaultMaxSteps,
 		escalateModel: cfg.EscalateModel,
 	}
@@ -578,8 +580,17 @@ func (a *Agent) ApplySetting(key, value string) {
 	case "git_attribution":
 		a.cfg.GitAttribution = truthy(value)
 		a.refreshSystemPrompt()
+	case "auto_approve":
+		a.autoApprove = truthy(value)
 	}
 }
+
+// SetAutoApprove toggles skipping the permission prompt for mutating tools this
+// session. AutoApprove reports the current state (surfaced in the REPL footer).
+func (a *Agent) SetAutoApprove(v bool) { a.autoApprove = v }
+
+// AutoApprove reports whether mutating tools run without a permission prompt.
+func (a *Agent) AutoApprove() bool { return a.autoApprove }
 
 // refreshSystemPrompt rebuilds the system message from the current cfg, so a
 // mid-session change to an input of composeSystemPrompt (model, attribution) is
@@ -988,6 +999,11 @@ func (a *Agent) RestoreSession(s *session.Session) {
 	// SetMessages reset the live measurement; restore the last-known context size
 	// so /context reads exact (not an estimate) immediately after attach.
 	a.lastPromptTokens = s.ContextTokens
+	// autoApprove is intentionally NOT restored from the session. It follows the
+	// persistent setting (settings.json / BORG_AUTO_APPROVE), resolved when the
+	// agent is built, so "skip every permission prompt" can never be baked into a
+	// saved session and silently reactivate on --attach in a different workspace.
+	// A security toggle should be a present, deliberate choice, not a resurrected one.
 }
 
 // SnapshotSession captures the agent's current settings + transcript into the
@@ -1727,10 +1743,12 @@ const verifyCmdPermitKey = "__verify_cmd__"
 // A denial or a non-interactive pipe skips it and reports "not failed" so the turn
 // can still finish; an allow runs it and any failure is fed back to be fixed.
 func (a *Agent) runProjectVerify(ctx context.Context, cmd string) (string, bool) {
-	if !a.always[verifyCmdPermitKey] {
+	if !a.always[verifyCmdPermitKey] && !a.autoApprove {
 		switch a.ui.Permit("verify: " + cmd) {
 		case DenyOnce:
 			return "", false
+		case AllowSession:
+			a.autoApprove = true // trust the whole session — no more prompts
 		case AllowAlways:
 			a.always[verifyCmdPermitKey] = true
 		case AllowOnce:
@@ -1908,11 +1926,13 @@ func (a *Agent) runTool(ctx context.Context, tc llm.ToolCall) string {
 	}
 	a.ui.ToolCall(tc.Function.Name, tc.Function.Arguments)
 
-	if t.Mutating() && !a.always[t.Name()] {
+	if t.Mutating() && !a.always[t.Name()] && !a.autoApprove {
 		switch a.ui.Permit(t.Name()) {
 		case DenyOnce:
 			a.ui.ToolResult(t.Name(), false, "permission denied")
 			return "error: the user denied permission to run this tool"
+		case AllowSession:
+			a.autoApprove = true // trust the whole session — no more prompts
 		case AllowAlways:
 			a.always[t.Name()] = true
 		case AllowOnce:

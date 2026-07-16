@@ -53,7 +53,7 @@ make docker-test
 | `internal/llm/` | HTTP client for xShellz's metered proxy (OpenAI-compatible SSE). Repetition guard, token counting, account model catalog fetching. |
 | `internal/session/` | Conversation persistence: one JSON file per session under `~/.config/borg/sessions/<id>.json` (0600). 8-hex-char IDs. Sessions store full message history + model + effort + cumulative token usage. |
 | `internal/eval/` | Eval harness: task corpus (25 tasks + 2 no-op convergence tests), baseline regression tracking, cassette replay, summary reports. Each task materializes a small Go module, prompts the agent, and scores with an objective oracle (`go build`/`go test`). Deterministic (cassette) and live (real proxy, nightly) variants. |
-| `internal/trust/` | Per-directory write-scope persistence (`~/.config/borg/trust.json`, 0600). Edits are confined to the trusted root; reads are unrestricted; bash is permission-gated per-call. |
+| `internal/trust/` | Per-directory write-scope persistence (`~/.config/borg/trust.json`, 0600). Edits are confined to the trusted root; reads are unrestricted; bash is permission-gated per-call (unless `auto_approve` is on, which skips the prompt but NOT the trust boundary). |
 | `internal/selfupdate/` | Checks `dl.turborg.com/latest/version.json` (throttled to once per day), fetches the correct archive by OS/arch, verifies SHA-256 from `checksums.txt`, performs atomic binary replacement. |
 | `internal/account/` | Best-effort cache of plan tier + model catalog (`~/.config/borg/account.json`, 0600) so the REPL paints instantly on startup. |
 | `internal/version/` | Single `var Version = "dev"` (overridden by `-ldflags` at release); `Command()` derives the brand from `argv[0]` ("turborg" or "borg"). |

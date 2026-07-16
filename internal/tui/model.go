@@ -34,6 +34,9 @@ var (
 	dim    = lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8"))
 	errSty = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff5d8f"))
 	brand  = lipgloss.NewStyle().Foreground(lipgloss.Color("#2d5cf3")).Bold(true)
+	// warn is amber: a caution state, not an error (red) and not nominal (dim).
+	// Used for the footer's auto-approve chip — "prompts are off" is worth noticing.
+	warn = lipgloss.NewStyle().Foreground(lipgloss.Color("#f0b833"))
 
 	// Edit-diff preview colors: added lines green, removed red, hunk header dim —
 	// the "git diff" of what an edit tool just changed, shown in scrollback.
@@ -194,6 +197,12 @@ func (m model) footerView(lpad string) string {
 		left += "  " + s
 	}
 	right := dim.Render(m.agent.Model() + " · " + reasoningLabel(m.agent.Effort(), m.agent.Think()))
+	// Flag an auto-approving session in the footer: when the permission prompt is
+	// off, the only remaining signal that a mutating tool ran is this chip, so it's
+	// always visible while auto-approve is on. Warn-colored on purpose.
+	if m.agent.AutoApprove() {
+		right = warn.Render("auto-approve") + dim.Render(" · ") + right
+	}
 	return lpad + joinLR(left, right, m.width-inputLeftPad)
 }
 
@@ -1477,6 +1486,8 @@ func (m model) onPermitKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch strings.ToLower(msg.String()) {
 	case "a":
 		d = agent.AllowAlways
+	case "t":
+		d = agent.AllowSession
 	case "y":
 		d = agent.AllowOnce
 	}
@@ -2311,7 +2322,7 @@ func (m model) View() tea.View {
 		b.WriteString(m.trustView())
 	case modePermit:
 		b.WriteString(dim.Render(fmt.Sprintf("  allow %s? ", m.permitName)) +
-			"[y]es / [n]o / [a]lways")
+			"[y]es / [n]o / [a]lways / [t]rust session")
 	case modeAskUser:
 		b.WriteString(m.askView())
 	case modeConfirmPurge:

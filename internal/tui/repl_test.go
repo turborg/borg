@@ -401,13 +401,15 @@ func TestSpinnerTickAndWindowSize(t *testing.T) {
 
 func TestPermitFlow(t *testing.T) {
 	for in, want := range map[string]agent.Decision{
-		"y": agent.AllowOnce, "a": agent.AllowAlways, "n": agent.DenyOnce,
+		"y": agent.AllowOnce, "a": agent.AllowAlways, "t": agent.AllowSession, "n": agent.DenyOnce,
 	} {
 		m := newTestModel(t)
 		reply := make(chan agent.Decision, 1)
 		m, _ = step(t, m, permitMsg{name: "bash", reply: reply})
 		require.Equal(t, modePermit, m.mode)
-		require.Contains(t, vw(m), "allow bash")
+		v := vw(m)
+		require.Contains(t, v, "allow bash")
+		require.Contains(t, v, "[t]rust session", "the trust-whole-session option must be offered")
 
 		m, _ = step(t, m, key(in))
 		require.Equalf(t, want, <-reply, "key %q", in)
