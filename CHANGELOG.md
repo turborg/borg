@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/turborg/borg/compare/v0.3.0...v0.3.1) (2026-07-16)
+
+
+### Documentation
+
+* add a demo GIF to the README ([#31](https://github.com/turborg/borg/issues/31)) ([238da0c](https://github.com/turborg/borg/commit/238da0cff47d63ce273137b24f632b77144e8a7f))
+
 ## [0.3.0](https://github.com/turborg/borg/compare/v0.2.0...v0.3.0) (2026-07-16)
 
 
