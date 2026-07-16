@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/turborg/borg/compare/v0.2.0...v0.3.0) (2026-07-16)
+
+
+### Features
+
+* **agent:** auto-approve mode + a [t]rust-session prompt option ([#9](https://github.com/turborg/borg/issues/9)) ([16f97cd](https://github.com/turborg/borg/commit/16f97cddef2453767ca193399bc307a3119e1b32))
+
 ## [0.2.0](https://github.com/turborg/borg/compare/v0.1.0...v0.2.0) (2026-07-15)
 
 
