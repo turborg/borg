@@ -1303,6 +1303,7 @@ var slashCmds = []slashCmd{
 	{"/clear", "reset the conversation"},
 	{"/purge", "delete ALL saved sessions"},
 	{"/update", "update to the latest release"},
+	{"/tools", "list all available tools"},
 	{"/help", "show detailed help"},
 	{"/exit", "quit (the session is saved)"},
 }
@@ -2044,6 +2045,25 @@ func (m model) command(input string) (tea.Model, tea.Cmd) {
 		return m.attachSession(fields)
 	case "/help":
 		return m, tea.Printf("%s", renderHelp(m.md, m.width))
+	case "/tools":
+		var b strings.Builder
+
+		b.WriteString("### Available Tools\n\n")
+
+		for _, t := range m.agent.ToolList() {
+			mode := "Read-only"
+			if t.Mutating {
+				mode = "Permission-gated"
+			}
+
+			fmt.Fprintf(&b, "- **%s** (%s) — %s\n",
+				t.Name,
+				mode,
+				t.Description,
+			)
+		}
+
+		return m, tea.Printf("%s", renderTools(m.md, m.width, b.String()))
 	case "/learn":
 		// Run the project-learn task as a turn (writing BORG.md prompts for
 		// permission like any edit). Same harness config as `borg learn`.
@@ -2600,6 +2620,17 @@ func renderHelp(md *mdRenderer, width int) string {
 	out, err := glamour.Render(helpMD, "dark")
 	if err != nil {
 		return helpMD
+	}
+	return out
+}
+
+func renderTools(md *mdRenderer, width int, text string) string {
+	if md != nil {
+		return strings.TrimRight(md.render(text, width), "\n")
+	}
+	out, err := glamour.Render(text, "dark")
+	if err != nil {
+		return text
 	}
 	return out
 }
