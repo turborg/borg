@@ -698,6 +698,11 @@ func (a *Agent) SetModel(model string) {
 // Model returns the current model codename.
 func (a *Agent) Model() string { return a.cfg.Model }
 
+// ToolList returns the registered tools in registration order.
+func (a *Agent) ToolList() []tools.ToolInfo {
+	return a.tools.ToolList()
+}
+
 // Provider returns the active backend kind (e.g. "xshellz", "ollama").
 func (a *Agent) Provider() string {
 	if a.cfg.Provider == "" {

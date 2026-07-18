@@ -163,11 +163,14 @@ func TestCommandHelpExitUnknownPurge(t *testing.T) {
 	_, cmd := slash(m, "/help")
 	require.NotNil(t, cmd)
 
+	_, cmd = slash(m, "/tools")
+	require.NotNil(t, cmd)
+
 	mq, _ := slash(m, "/exit")
 	require.True(t, mq.quitting)
 
 	_, cmd = slash(m, "/bogus")
-	require.NotNil(t, cmd) // prints an "unknown command" line
+	require.NotNil(t, cmd)
 
 	mp, _ := slash(m, "/purge")
 	require.Equal(t, modeConfirmPurge, mp.mode)

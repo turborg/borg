@@ -30,6 +30,13 @@ type FunctionDef struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
+// ToolInfo contains human-readable information about a registered tool.
+type ToolInfo struct {
+	Name        string
+	Description string
+	Mutating    bool
+}
+
 // Registry holds the tools available to the agent, preserving order.
 type Registry struct {
 	tools map[string]Tool
@@ -71,6 +78,23 @@ func (r *Registry) Definitions() []Definition {
 		})
 	}
 	return defs
+}
+
+// ToolList returns the registered tools in registration order.
+func (r *Registry) ToolList() []ToolInfo {
+	out := make([]ToolInfo, 0, len(r.order))
+
+	for _, name := range r.order {
+		t := r.tools[name]
+
+		out = append(out, ToolInfo{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Mutating:    t.Mutating(),
+		})
+	}
+
+	return out
 }
 
 // DefaultRegistry returns the standard coding-agent toolset.
